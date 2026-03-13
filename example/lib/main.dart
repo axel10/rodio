@@ -5,6 +5,8 @@ import 'package:cross_file/cross_file.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:audio_visualizer_player/audio_visualizer_player.dart';
+import 'package:file_picker/file_picker.dart';
+
 
 void main() {
   runApp(const MyApp());
