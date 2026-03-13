@@ -39,6 +39,10 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   StreamSubscription<FftFrame>? _sub;
   List<double> _bands = const [];
 
+  StreamSubscription<WaveformChunk>? _waveformSub;
+  List<double> _waveform = [];
+  final int _waveformChunks = 200;
+
   @override
   void initState() {
     super.initState();
@@ -101,8 +105,25 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     }
   }
 
+  void _loadWaveform() {
+    _waveformSub?.cancel();
+    _waveform = List.filled(_waveformChunks, 0.0);
+    _waveformSub = _controller.extractWaveform(expectedChunks: _waveformChunks).listen((chunk) {
+      if (!mounted) return;
+      setState(() {
+        final index = chunk.index.toInt();
+        if (index >= 0 && index < _waveform.length) {
+          _waveform[index] = chunk.peak;
+        }
+      });
+    }, onError: (e) {
+      debugPrint('Waveform extraction error: $e');
+    });
+  }
+
   @override
   void dispose() {
+    _waveformSub?.cancel();
     _sub?.cancel();
     _controller.dispose();
     super.dispose();
@@ -163,6 +184,11 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (_controller.selectedPath != null)
+                  ElevatedButton(
+                    onPressed: _loadWaveform,
+                    child: const Text('Extract Full Waveform (Fast)'),
+                  ),
                 if (_controller.playlist.isNotEmpty)
                   Align(
                     alignment: Alignment.centerLeft,
@@ -202,6 +228,20 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                   ),
                 ],
                 const SizedBox(height: 16),
+                SizedBox(
+                  height: 60,
+                  width: double.infinity,
+                  child: CustomPaint(
+                    painter: WaveformPainter(
+                      _waveform,
+                      _controller.duration.inMilliseconds > 0
+                          ? _controller.position.inMilliseconds /
+                                _controller.duration.inMilliseconds
+                          : 0.0,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Expanded(
                   child: AudioDropRegion(
                     controller: _controller,
@@ -233,6 +273,50 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   }
 }
 
+class WaveformPainter extends CustomPainter {
+  WaveformPainter(this.waveform, this.progress);
+
+  final List<double> waveform;
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (waveform.isEmpty) return;
+
+    final barWidth = size.width / waveform.length;
+    final maxBarHeight = size.height;
+
+    final playedPaint = Paint()
+      ..color = Colors.blue
+      ..style = PaintingStyle.fill;
+
+    final unplayedPaint = Paint()
+      ..color = Colors.grey.withOpacity(0.5)
+      ..style = PaintingStyle.fill;
+
+    for (var i = 0; i < waveform.length; i++) {
+      final value = waveform[i];
+      final height = (value * maxBarHeight).clamp(2.0, maxBarHeight);
+      final left = i * barWidth;
+      final top = (maxBarHeight - height) / 2; // Center vertically
+
+      final rect = Rect.fromLTWH(left, top, barWidth - 1, height);
+      final isPlayed = (i / waveform.length) <= progress;
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+        isPlayed ? playedPaint : unplayedPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant WaveformPainter oldDelegate) {
+    // Usually you'd check specifically if waveform array identity changed or progress changed
+    return true;
+  }
+}
+
 class DemoSpectrumPainter extends CustomPainter {
   DemoSpectrumPainter(this.bands);
 
@@ -243,7 +327,6 @@ class DemoSpectrumPainter extends CustomPainter {
     if (bands.isEmpty) {
       return;
     }
-    debugPrint(bands.toString());
     const safeTop = 6.0;
     const safeBottom = 6.0;
     const gap = 2.0;

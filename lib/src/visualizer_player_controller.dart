@@ -1345,4 +1345,16 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     _playlistStateController.close();
     _playlistStateNotifier.dispose();
   }
+
+  /// Extracts the waveform of currently loaded audio extremely fast via a background Rust thread,
+  /// streaming the resulting chunks incrementally.
+  /// Each chunk provides the maximum absolute amplitude (peak) of its segment.
+  /// [expectedChunks] dictates the temporal resolution of the total extracted waveform.
+  Stream<WaveformChunk> extractWaveform({
+    required int expectedChunks,
+  }) {
+    return extractWaveformStreaming(
+      expectedChunks: BigInt.from(expectedChunks),
+    );
+  }
 }

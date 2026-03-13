@@ -415,3 +415,142 @@ pub fn get_loaded_audio_path() -> Option<String> {
     }
     None
 }
+
+use crate::frb_generated::StreamSink;
+
+#[derive(Debug, Clone)]
+pub struct WaveformChunk {
+    pub index: usize,
+    pub peak: f32, // absolute max peak
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn extract_waveform_streaming(
+    expected_chunks: usize,
+    sink: StreamSink<WaveformChunk>,
+) -> Result<(), String> {
+    let path = {
+        if let Ok(c) = controller().lock() {
+            c.loaded_path.clone()
+        } else {
+            None
+        }
+    }
+    .ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?;
+
+    std::thread::spawn(move || {
+        let decode_core = || -> Result<(), String> {
+            let file = File::open(&path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
+            let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {}", e))?;
+
+            let total_samples = match source.total_duration() {
+                Some(dur) => {
+                    let sample_rate: u32 = source.sample_rate().into();
+                    let channels: u16 = source.channels().into();
+                    (dur.as_millis() as u64 * sample_rate as u64 / 1000 * channels as u64) as usize
+                }
+                None => {
+                    // Fallback: guess 3 minutes worth of samples
+                    let sample_rate: u32 = source.sample_rate().into();
+                    let channels: u16 = source.channels().into();
+                    3 * 60 * sample_rate as usize * channels as usize
+                }
+            };
+
+            let samples_per_chunk = (total_samples / expected_chunks).max(1);
+
+            let mut current_chunk_max = 0.0f32;
+            let mut samples_in_chunk = 0usize;
+            let mut chunk_index = 0usize;
+
+            for sample in source {
+                // sample is f32 in rodio > 0.18
+                let abs_sample = sample.abs();
+                if abs_sample > current_chunk_max {
+                    current_chunk_max = abs_sample;
+                }
+                samples_in_chunk += 1;
+
+                if samples_in_chunk >= samples_per_chunk {
+                    let _ = sink.add(WaveformChunk {
+                        index: chunk_index,
+                        peak: current_chunk_max.min(1.0),
+                    });
+
+                    chunk_index += 1;
+                    samples_in_chunk = 0;
+                    current_chunk_max = 0.0;
+                }
+            }
+
+            // Remainder 
+            if samples_in_chunk > 0 {
+                let _ = sink.add(WaveformChunk {
+                    index: chunk_index,
+                    peak: current_chunk_max.min(1.0),
+                });
+            }
+
+            Ok(())
+        };
+
+        if let Err(e) = decode_core() {
+            println!("extract_waveform_streaming error: {:?}", e);
+        }
+    });
+
+    Ok(())
+}
+
+
+pub fn extract_loaded_waveform(expected_chunks: usize) -> Result<Vec<f32>, String> {
+    let path = {
+        if let Ok(c) = controller().lock() {
+            c.loaded_path.clone()
+        } else {
+            None
+        }
+    }.ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?;
+
+    let file = File::open(&path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
+    let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {}", e))?;
+
+    let total_samples = match source.total_duration() {
+        Some(dur) => {
+            let sample_rate: u32 = source.sample_rate().into();
+            let channels: u16 = source.channels().into();
+            (dur.as_millis() as u64 * sample_rate as u64 / 1000 * channels as u64) as usize
+        }
+        None => {
+            let sample_rate: u32 = source.sample_rate().into();
+            let channels: u16 = source.channels().into();
+            3 * 60 * sample_rate as usize * channels as usize
+        }
+    };
+
+    let samples_per_chunk = (total_samples / expected_chunks).max(1);
+
+    let mut result = Vec::with_capacity(expected_chunks);
+    let mut current_chunk_max = 0.0f32;
+    let mut samples_in_chunk = 0usize;
+
+    for sample in source {
+        let abs_sample = sample.abs();
+        if abs_sample > current_chunk_max {
+            current_chunk_max = abs_sample;
+        }
+        samples_in_chunk += 1;
+
+        if samples_in_chunk >= samples_per_chunk {
+            result.push(current_chunk_max.min(1.0));
+            samples_in_chunk = 0;
+            current_chunk_max = 0.0;
+        }
+    }
+
+    if samples_in_chunk > 0 {
+        result.push(current_chunk_max.min(1.0));
+    }
+
+    Ok(result)
+}
