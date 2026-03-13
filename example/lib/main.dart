@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:audio_visualizer_player/audio_visualizer_player.dart';
 import 'package:file_picker/file_picker.dart';
 
-
 void main() {
   runApp(const MyApp());
 }
@@ -54,7 +53,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
         aggregationMode: FftAggregationMode.rms,
         frequencyGroups: 64,
         targetFrameRate: 60,
-        groupContrastExponent: 3
+        groupContrastExponent: 3,
       ),
     );
     _controller.initialize();
@@ -80,17 +79,16 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       return;
     }
 
-    final tracks = result.files.map((file) {
-      final path = file.path;
-      if (path == null || path.isEmpty) {
-        return null;
-      }
-      return AudioTrack(
-        id: path,
-        title: file.name,
-        uri: path,
-      );
-    }).whereType<AudioTrack>().toList();
+    final tracks = result.files
+        .map((file) {
+          final path = file.path;
+          if (path == null || path.isEmpty) {
+            return null;
+          }
+          return AudioTrack(id: path, title: file.name, uri: path);
+        })
+        .whereType<AudioTrack>()
+        .toList();
 
     if (tracks.isEmpty) {
       return;
@@ -142,7 +140,9 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                       onPressed: _controller.selectedPath != null
                           ? _controller.togglePlayPause
                           : null,
-                      child: Icon(_controller.isPlaying ? Icons.pause : Icons.play_arrow),
+                      child: Icon(
+                        _controller.isPlaying ? Icons.pause : Icons.play_arrow,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     ElevatedButton(
@@ -178,9 +178,10 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                 ),
                 Slider(
                   value: _controller.duration.inMilliseconds > 0
-                      ? _controller.position.inMilliseconds
-                          .toDouble()
-                          .clamp(0, _controller.duration.inMilliseconds.toDouble())
+                      ? _controller.position.inMilliseconds.toDouble().clamp(
+                          0,
+                          _controller.duration.inMilliseconds.toDouble(),
+                        )
                       : 0.0,
                   max: _controller.duration.inMilliseconds.toDouble() > 0
                       ? _controller.duration.inMilliseconds.toDouble()
@@ -314,17 +315,14 @@ class _AudioDropRegionState extends State<AudioDropRegion> {
     for (final file in files) {
       final path = file.path;
       if (path.isNotEmpty && File(path).existsSync()) {
-        tracks.add(AudioTrack(
-          id: path,
-          title: file.name,
-          uri: path,
-        ));
+        tracks.add(AudioTrack(id: path, title: file.name, uri: path));
       }
     }
     if (tracks.isEmpty) return;
 
     await widget.controller.addTracks(tracks);
-    if (!widget.controller.isPlaying && widget.controller.selectedPath != null) {
+    if (!widget.controller.isPlaying &&
+        widget.controller.selectedPath != null) {
       await widget.controller.play();
     }
   }

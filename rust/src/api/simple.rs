@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 const FFT_SIZE: usize = 1024;
-const FFT_BINS: usize = 96;
+const RAW_FFT_BINS: usize = FFT_SIZE / 2;
 
 static PLAYER_CONTROLLER: OnceLock<Mutex<PlayerController>> = OnceLock::new();
 
@@ -28,7 +28,7 @@ impl PlayerController {
         Self {
             sink: None,
             player: None,
-            latest_fft: Arc::new(Mutex::new(vec![0.0; FFT_BINS])),
+            latest_fft: Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS])),
             loaded_path: None,
             loaded_duration: Duration::ZERO,
             source_start_offset: Duration::ZERO,
@@ -164,23 +164,8 @@ where
             .map(|c| (c.re * c.re + c.im * c.im).sqrt())
             .collect();
 
-        let chunk_size = (magnitudes.len() / FFT_BINS).max(1);
-        let mut bins = Vec::with_capacity(FFT_BINS);
-
-        for chunk in magnitudes.chunks(chunk_size).take(FFT_BINS) {
-            let max_v = chunk
-                .iter()
-                .copied()
-                .fold(0.0_f32, |acc, x| if x > acc { x } else { acc });
-            bins.push((1.0 + max_v).ln());
-        }
-
-        if bins.len() < FFT_BINS {
-            bins.resize(FFT_BINS, 0.0);
-        }
-
         if let Ok(mut shared) = self.latest_fft.lock() {
-            *shared = bins;
+            *shared = magnitudes;
         }
     }
 }
@@ -367,7 +352,7 @@ pub fn get_latest_fft() -> Vec<f32> {
             return fft.clone();
         }
     }
-    vec![0.0; FFT_BINS]
+    vec![0.0; RAW_FFT_BINS]
 }
 
 #[flutter_rust_bridge::frb(sync)]

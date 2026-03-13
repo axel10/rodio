@@ -408,8 +408,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     required int outCount,
     bool useFastMode = true,
   }) async {
-    _error =
-        'Whole-track waveform is not implemented in the FRB backend yet.';
+    _error = 'Whole-track waveform is not implemented in the FRB backend yet.';
     notifyListeners();
     return const [];
   }
