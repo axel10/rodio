@@ -18,6 +18,9 @@ struct PlayerController {
     player: Option<Player>,
     latest_fft: Arc<Mutex<Vec<f32>>>,
     loaded_path: Option<String>,
+    loaded_duration: Duration,
+    source_start_offset: Duration,
+    volume: f32,
 }
 
 impl PlayerController {
@@ -27,6 +30,9 @@ impl PlayerController {
             player: None,
             latest_fft: Arc::new(Mutex::new(vec![0.0; FFT_BINS])),
             loaded_path: None,
+            loaded_duration: Duration::ZERO,
+            source_start_offset: Duration::ZERO,
+            volume: 1.0,
         }
     }
 
@@ -52,6 +58,71 @@ impl PlayerController {
             .as_ref()
             .map(f)
             .ok_or_else(|| "player is not initialized".to_string())
+    }
+
+    fn clear_fft(&self) {
+        if let Ok(mut shared) = self.latest_fft.lock() {
+            shared.fill(0.0);
+        }
+    }
+
+    fn append_from_path(
+        &mut self,
+        path: &str,
+        start_offset: Duration,
+        auto_play: bool,
+    ) -> Result<(), String> {
+        self.ensure_audio_output()?;
+
+        let file = File::open(path).map_err(|e| format!("open file failed: {e}"))?;
+        let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {e}"))?;
+
+        let total = source.total_duration().unwrap_or(Duration::ZERO);
+        let clamped_offset = if total.is_zero() {
+            start_offset
+        } else {
+            start_offset.min(total)
+        };
+
+        self.with_player(|player| {
+            player.clear();
+            player.set_volume(self.volume);
+            if clamped_offset > Duration::ZERO {
+                player.append(FftSource::new(
+                    source.skip_duration(clamped_offset),
+                    Arc::clone(&self.latest_fft),
+                ));
+            } else {
+                player.append(FftSource::new(source, Arc::clone(&self.latest_fft)));
+            }
+            if auto_play {
+                player.play();
+            } else {
+                player.pause();
+            }
+        })?;
+
+        self.loaded_path = Some(path.to_string());
+        self.loaded_duration = total;
+        self.source_start_offset = clamped_offset;
+        self.clear_fft();
+
+        Ok(())
+    }
+
+    fn playback_position(&self) -> Duration {
+        let Some(player) = self.player.as_ref() else {
+            return Duration::ZERO;
+        };
+
+        let mut pos = self.source_start_offset.saturating_add(player.get_pos());
+        if !self.loaded_duration.is_zero() {
+            pos = pos.min(self.loaded_duration);
+        }
+        if player.empty() && !self.loaded_duration.is_zero() {
+            return self.loaded_duration;
+        }
+        pos
     }
 }
 
@@ -155,6 +226,12 @@ where
     fn total_duration(&self) -> Option<Duration> {
         self.inner.total_duration()
     }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.index = 0;
+        self.buffer.fill(Complex { re: 0.0, im: 0.0 });
+        self.inner.try_seek(pos)
+    }
 }
 
 #[flutter_rust_bridge::frb(sync)] // Synchronous mode for simplicity of the demo
@@ -175,20 +252,7 @@ pub fn load_audio_file(path: String) -> Result<(), String> {
     let mut c = controller()
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
-    c.ensure_audio_output()?;
-
-    let file = File::open(&path).map_err(|e| format!("open file failed: {e}"))?;
-    let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {e}"))?;
-    let fft_source = FftSource::new(source, Arc::clone(&c.latest_fft));
-
-    c.with_player(|player| {
-        player.clear();
-        player.append(fft_source);
-        player.play();
-    })?;
-
-    c.loaded_path = Some(path);
-    Ok(())
+    c.append_from_path(&path, Duration::ZERO, false)
 }
 
 pub fn play_audio() -> Result<(), String> {
@@ -226,6 +290,50 @@ pub fn toggle_audio() -> Result<bool, String> {
     })
 }
 
+pub fn seek_audio_ms(position_ms: i64) -> Result<(), String> {
+    let mut c = controller()
+        .lock()
+        .map_err(|_| "player lock poisoned".to_string())?;
+
+    let path = c
+        .loaded_path
+        .clone()
+        .ok_or_else(|| "audio is not loaded".to_string())?;
+
+    let was_playing = c.with_player(|player| !player.is_paused() && !player.empty())?;
+    let target_ms = position_ms.max(0) as u64;
+    c.append_from_path(&path, Duration::from_millis(target_ms), was_playing)
+}
+
+pub fn set_audio_volume(volume: f32) -> Result<(), String> {
+    let mut c = controller()
+        .lock()
+        .map_err(|_| "player lock poisoned".to_string())?;
+
+    let clamped = volume.clamp(0.0, 1.0);
+    c.volume = clamped;
+    c.with_player(|player| {
+        player.set_volume(clamped);
+    })?;
+    Ok(())
+}
+
+pub fn dispose_audio() -> Result<(), String> {
+    let mut c = controller()
+        .lock()
+        .map_err(|_| "player lock poisoned".to_string())?;
+
+    if let Some(player) = c.player.as_ref() {
+        player.clear();
+        player.pause();
+    }
+    c.loaded_path = None;
+    c.loaded_duration = Duration::ZERO;
+    c.source_start_offset = Duration::ZERO;
+    c.clear_fft();
+    Ok(())
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn is_audio_playing() -> bool {
     if let Ok(c) = controller().lock() {
@@ -234,6 +342,22 @@ pub fn is_audio_playing() -> bool {
         }
     }
     false
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn get_audio_duration_ms() -> i64 {
+    if let Ok(c) = controller().lock() {
+        return c.loaded_duration.as_millis().min(i64::MAX as u128) as i64;
+    }
+    0
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn get_audio_position_ms() -> i64 {
+    if let Ok(c) = controller().lock() {
+        return c.playback_position().as_millis().min(i64::MAX as u128) as i64;
+    }
+    0
 }
 
 #[flutter_rust_bridge::frb(sync)]

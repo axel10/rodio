@@ -3,10 +3,12 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'fft_processor.dart';
 import 'player_models.dart';
+import 'rust/api/simple.dart';
+import 'rust/frb_generated.dart';
 
 /// A single FFT frame emitted by the player.
 ///
@@ -47,13 +49,6 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     _fftProcessor = FftProcessor(fftSize: fftSize, options: visualOptions);
   }
 
-  static const MethodChannel _androidPlayerChannel = MethodChannel(
-    'audio_visualizer_player/player',
-  );
-  static const EventChannel _androidFftChannel = EventChannel(
-    'audio_visualizer_player/fft_bands',
-  );
-
   /// FFT size requested from native analysis.
   final int fftSize;
 
@@ -63,12 +58,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   /// Output smoothing/grouping options for visualization.
   VisualizerOptimizationOptions get visualOptions => _fftProcessor.options;
 
-  MavNative? _native;
-  StreamSubscription<dynamic>? _androidFftSub;
   Timer? _analysisTick;
   Timer? _renderTick;
   bool _initialized = false;
-  bool _androidPollInFlight = false;
   int _lastAnalysisMicros = 0;
   bool _fftEnabled = true;
 
@@ -146,20 +138,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
 
   /// Requests required runtime permissions on Android.
   ///
-  /// Returns `true` when permission is granted (or not required).
+  /// Returns `true` because file playback with rodio does not need mic permission.
   Future<bool> requestPermissions() async {
-    if (isAndroid) {
-      final status = await Permission.microphone.request();
-      if (status.isGranted) {
-        clearError();
-        return true;
-      } else {
-        _error = 'Microphone permission is required for Visualizer.';
-        notifyListeners();
-        return false;
-      }
-    }
-    return true; // Not required for Windows
+    clearError();
+    return true;
   }
 
   /// Initializes native playback/analyzer resources.
@@ -173,29 +155,12 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       return;
     }
 
-    if (isWindows) {
-      _native = MavNative.open();
-      final rc = _native!.createFft(fftSize);
-      if (rc != 0) {
-        _error = 'Native FFT init failed: $rc';
-        notifyListeners();
-        return;
-      }
-    } else {
-      _androidFftSub = _androidFftChannel.receiveBroadcastStream().listen((
-        event,
-      ) {
-        if (event is! List<dynamic>) {
-          return;
-        }
-        _fftProcessor.processAnalysis(
-          List<double>.generate(
-            event.length,
-            (i) => (event[i] as num).toDouble(),
-          ),
-          0.0, // dtSec not strictly needed for raw update if not smoothing raw
-        );
-      });
+    try {
+      await RustLib.init();
+    } catch (e) {
+      _error = 'Rust bridge init failed: $e';
+      notifyListeners();
+      return;
     }
 
     _analysisTick = Timer.periodic(_analysisInterval, (_) => _onAnalysisTick());
@@ -226,72 +191,20 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       await _ensureActivePlaylist();
     }
 
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        _error = 'Controller is not initialized.';
-        _playerState = PlayerState.error;
-        _emitPlaylistState();
-        notifyListeners();
-        return;
-      }
-      final loadRc = native.loadAudioFile(path);
-      if (loadRc != 0) {
-        _error = 'Native load failed: $loadRc';
-        _playerState = PlayerState.error;
-        _emitPlaylistState();
-        notifyListeners();
-        return;
-      }
-      final openRc = native.openAudioForPlayback(path);
-      if (openRc != 0) {
-        _error = 'Native playback open failed: $openRc';
-        _playerState = PlayerState.error;
-        _emitPlaylistState();
-        notifyListeners();
-        return;
-      }
-      _selectedPath = path;
-      _position = Duration.zero;
-      _duration = Duration(milliseconds: native.getDurationMs());
-      _isPlaying = false;
-      _playerState = PlayerState.ready;
-      native.playerSetVolume(_volume);
-      _resetFftState();
-      if (!_playlistInternalLoad) {
-        _syncLegacySingleTrackPlaylist(path, duration: _duration);
-      }
-      _emitPlaylistState();
-      notifyListeners();
-      return;
-    }
-
-    final status = await Permission.microphone.status;
-    if (!status.isGranted) {
-      _error =
-          'Microphone permission is required for Visualizer. Please call requestPermissions() first.';
+    try {
+      await loadAudioFile(path: path);
+      await setAudioVolume(volume: _volume);
+    } catch (e) {
+      _error = 'Load failed: $e';
       _playerState = PlayerState.error;
       _emitPlaylistState();
       notifyListeners();
       return;
     }
-    final rc = await _androidCallInt('loadAudio', <String, dynamic>{
-      'path': path,
-      'fftSize': fftSize,
-      'analysisHz': analysisFrequencyHz,
-    });
-    if (rc != 0) {
-      _error = 'Android load failed: $rc';
-      _playerState = PlayerState.error;
-      _emitPlaylistState();
-      notifyListeners();
-      return;
-    }
-    await _androidPlayerChannel.invokeMethod('setVolume', {'volume': _volume});
-    final durationMs = await _androidCallInt('getDurationMs');
+    final durationMs = getAudioDurationMs();
     _selectedPath = path;
     _position = Duration.zero;
-    _duration = Duration(milliseconds: durationMs);
+    _duration = Duration(milliseconds: durationMs.toInt());
     _isPlaying = false;
     _playerState = PlayerState.ready;
     _resetFftState();
@@ -339,30 +252,13 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
 
   /// Starts playback of the currently loaded track.
   Future<void> play() async {
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        return;
-      }
-      final rc = native.playerPlay();
-      if (rc != 0) {
-        _error = 'Native player error: $rc';
-        _playerState = PlayerState.error;
-      } else {
-        _isPlaying = true;
-        _playerState = PlayerState.playing;
-      }
-      _emitPlaylistState();
-      notifyListeners();
-      return;
-    }
-    final rc = await _androidCallInt('play');
-    if (rc != 0) {
-      _error = 'Android player error: $rc';
-      _playerState = PlayerState.error;
-    } else {
+    try {
+      await playAudio();
       _isPlaying = true;
       _playerState = PlayerState.playing;
+    } catch (e) {
+      _error = 'Play failed: $e';
+      _playerState = PlayerState.error;
     }
     _emitPlaylistState();
     notifyListeners();
@@ -371,30 +267,13 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   /// Pauses playback.
   Future<void> pause() async {
     _suppressAutoAdvanceFor(const Duration(milliseconds: 900));
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        return;
-      }
-      final rc = native.playerPause();
-      if (rc != 0) {
-        _error = 'Native player error: $rc';
-        _playerState = PlayerState.error;
-      } else {
-        _isPlaying = false;
-        _playerState = PlayerState.paused;
-      }
-      _emitPlaylistState();
-      notifyListeners();
-      return;
-    }
-    final rc = await _androidCallInt('pause');
-    if (rc != 0) {
-      _error = 'Android player error: $rc';
-      _playerState = PlayerState.error;
-    } else {
+    try {
+      await pauseAudio();
       _isPlaying = false;
       _playerState = PlayerState.paused;
+    } catch (e) {
+      _error = 'Pause failed: $e';
+      _playerState = PlayerState.error;
     }
     _emitPlaylistState();
     notifyListeners();
@@ -407,28 +286,11 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     }
     _suppressAutoAdvanceFor(const Duration(milliseconds: 600));
     final ms = target.inMilliseconds.clamp(0, _duration.inMilliseconds);
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        return;
-      }
-      final rc = native.playerSeekMs(ms);
-      if (rc != 0) {
-        _error = 'Native seek error: $rc';
-      } else {
-        _position = Duration(milliseconds: ms);
-      }
-      _emitPlaylistState();
-      notifyListeners();
-      return;
-    }
-    final rc = await _androidCallInt('seekMs', <String, dynamic>{
-      'positionMs': ms,
-    });
-    if (rc != 0) {
-      _error = 'Android seek error: $rc';
-    } else {
+    try {
+      await seekAudioMs(positionMs: ms);
       _position = Duration(milliseconds: ms);
+    } catch (e) {
+      _error = 'Seek failed: $e';
     }
     _emitPlaylistState();
     notifyListeners();
@@ -437,12 +299,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   /// Sets playback volume in range `0..1`.
   Future<void> setVolume(double volume) async {
     _volume = volume.clamp(0.0, 1.0);
-    if (isWindows) {
-      _native?.playerSetVolume(_volume);
-    } else if (isAndroid) {
-      await _androidPlayerChannel.invokeMethod('setVolume', {
-        'volume': _volume,
-      });
+    try {
+      await setAudioVolume(volume: _volume);
+    } catch (e) {
+      _error = 'Set volume failed: $e';
     }
     _emitPlaylistState();
     notifyListeners();
@@ -548,32 +408,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     required int outCount,
     bool useFastMode = true,
   }) async {
-    if (!isWindows) {
-      // Currently only fully implemented and optimized in C++ for Windows.
-      // If Android implementation is added, bridge it properly here.
-      return [];
-    }
-
-    // compute allows background execution of heavy synchronous logic on all supported platforms.
-    return await compute((_) {
-      final native = MavNative.open();
-      // Ensure FFT environment uses consistent sizes. Though not strictly necessary
-      // for the independent waveform API, initializing it properly is safe.
-      native.createFft(2048);
-      return native.getWholeTrackWaveform(
-        filePath: filePath,
-        outCount: outCount,
-        useFastMode: useFastMode,
-      );
-    }, null);
-  }
-
-  Future<int> _androidCallInt(
-    String method, [
-    Map<String, dynamic>? args,
-  ]) async {
-    final value = await _androidPlayerChannel.invokeMethod<int>(method, args);
-    return value ?? 0;
+    _error =
+        'Whole-track waveform is not implemented in the FRB backend yet.';
+    notifyListeners();
+    return const [];
   }
 
   Future<void> _onAnalysisTick() async {
@@ -582,19 +420,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     }
     await _pollPlaybackState();
 
-    List<double> rawBins = const [];
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        return;
-      }
-      rawBins = native.getSpectrumAtMs(
-        positionMs: _position.inMilliseconds,
-        outCount: fftSize ~/ 2,
-      );
-    } else {
-      rawBins = _fftProcessor.latestRawFft;
-    }
+    List<double> rawBins = List<double>.from(getLatestFft());
     if (rawBins.isEmpty) {
       return;
     }
@@ -630,38 +456,13 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
 
   Future<void> _pollPlaybackState() async {
     final wasPlaying = _isPlaying;
-    if (isWindows) {
-      final native = _native;
-      if (native == null) {
-        return;
-      }
-      _position = Duration(milliseconds: native.playerGetPositionMs());
-      _isPlaying = native.playerIsPlaying();
-
-      // Simple status derivation for recurring poll
-      if (_isPlaying) {
-        _playerState = PlayerState.playing;
-      } else if (_selectedPath != null &&
-          _position.inMilliseconds >= (_duration.inMilliseconds - 100)) {
-        _playerState = PlayerState.completed;
-      } else if (_selectedPath != null) {
-        _playerState = PlayerState.paused;
-      }
-
-      _emitPlaylistState();
-      notifyListeners();
-      await _handleAutoTransitionIfNeeded(wasPlaying: wasPlaying);
-      return;
-    }
-    if (_androidPollInFlight) {
-      return;
-    }
-    _androidPollInFlight = true;
     try {
-      final positionMs = await _androidCallInt('getPositionMs');
-      final playing = await _androidCallInt('isPlaying');
-      _position = Duration(milliseconds: positionMs);
-      _isPlaying = playing == 1;
+      _position = Duration(milliseconds: getAudioPositionMs().toInt());
+      final newDurationMs = getAudioDurationMs().toInt();
+      if (newDurationMs > 0) {
+        _duration = Duration(milliseconds: newDurationMs);
+      }
+      _isPlaying = isAudioPlaying();
 
       if (_isPlaying) {
         _playerState = PlayerState.playing;
@@ -675,8 +476,11 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       _emitPlaylistState();
       notifyListeners();
       await _handleAutoTransitionIfNeeded(wasPlaying: wasPlaying);
-    } finally {
-      _androidPollInFlight = false;
+    } catch (e) {
+      _error = 'Playback poll failed: $e';
+      _playerState = PlayerState.error;
+      _emitPlaylistState();
+      notifyListeners();
     }
   }
 
@@ -716,14 +520,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   void dispose() {
     _analysisTick?.cancel();
     _renderTick?.cancel();
-    _androidFftSub?.cancel();
-    if (isWindows && _native != null) {
-      _native!.dispose();
-      _native = null;
-    }
-    if (isAndroid) {
-      _androidPlayerChannel.invokeMethod<int>('dispose');
-    }
+    unawaited(disposeAudio());
     _rawFftController.close();
     _optimizedFftController.close();
     _disposePlaylistState();

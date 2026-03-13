@@ -6,9 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `compute_fft`, `controller`, `ensure_audio_output`, `new`, `new`, `with_player`
+// These functions are ignored because they are not marked as `pub`: `append_from_path`, `clear_fft`, `compute_fft`, `controller`, `ensure_audio_output`, `new`, `new`, `playback_position`, `with_player`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FftSource`, `PlayerController`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `channels`, `current_span_len`, `next`, `sample_rate`, `total_duration`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `channels`, `current_span_len`, `next`, `sample_rate`, `total_duration`, `try_seek`
 
 String greet({required String name}) =>
     RustLib.instance.api.crateApiSimpleGreet(name: name);
@@ -22,7 +22,22 @@ Future<void> pauseAudio() => RustLib.instance.api.crateApiSimplePauseAudio();
 
 Future<bool> toggleAudio() => RustLib.instance.api.crateApiSimpleToggleAudio();
 
+Future<void> seekAudioMs({required PlatformInt64 positionMs}) =>
+    RustLib.instance.api.crateApiSimpleSeekAudioMs(positionMs: positionMs);
+
+Future<void> setAudioVolume({required double volume}) =>
+    RustLib.instance.api.crateApiSimpleSetAudioVolume(volume: volume);
+
+Future<void> disposeAudio() =>
+    RustLib.instance.api.crateApiSimpleDisposeAudio();
+
 bool isAudioPlaying() => RustLib.instance.api.crateApiSimpleIsAudioPlaying();
+
+PlatformInt64 getAudioDurationMs() =>
+    RustLib.instance.api.crateApiSimpleGetAudioDurationMs();
+
+PlatformInt64 getAudioPositionMs() =>
+    RustLib.instance.api.crateApiSimpleGetAudioPositionMs();
 
 Float32List getLatestFft() => RustLib.instance.api.crateApiSimpleGetLatestFft();
 

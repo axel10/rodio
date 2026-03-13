@@ -37,8 +37,8 @@ class VisualizerDemoPage extends StatefulWidget {
 
 class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   late final AudioVisualizerPlayerController _controller;
-  StreamSubscription<FftFrame>? _optimizedSub;
-  List<double> _optimizedBands = const [];
+  StreamSubscription<FftFrame>? _sub;
+  List<double> _bands = const [];
 
   @override
   void initState() {
@@ -58,13 +58,12 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       ),
     );
     _controller.initialize();
-    _optimizedSub = _controller.rawFftStream.listen((frame) {
-      // _optimizedSub = _controller.optimizedFftStream.listen((frame) {
+    _sub = _controller.rawFftStream.listen((frame) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _optimizedBands = frame.values;
+        _bands = frame.values;
       });
     });
   }
@@ -98,15 +97,14 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     }
 
     await _controller.addTracks(tracks);
-    // If nothing is playing, start the first one
-    if (_controller.selectedPath == null) {
-      await _controller.playAt(0);
+    if (!_controller.isPlaying && _controller.selectedPath != null) {
+      await _controller.play();
     }
   }
 
   @override
   void dispose() {
-    _optimizedSub?.cancel();
+    _sub?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -153,17 +151,6 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                           : null,
                       child: const Icon(Icons.skip_next),
                     ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    if (_controller.isAndroid) ...[
-                      ElevatedButton(
-                        onPressed: () => _controller.requestPermissions(),
-                        child: const Text('Grant Mic Permission'),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -223,7 +210,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: CustomPaint(
-                        painter: DemoSpectrumPainter(_optimizedBands),
+                        painter: DemoSpectrumPainter(_bands),
                         child: const SizedBox.expand(),
                       ),
                     ),
@@ -337,8 +324,8 @@ class _AudioDropRegionState extends State<AudioDropRegion> {
     if (tracks.isEmpty) return;
 
     await widget.controller.addTracks(tracks);
-    if (widget.controller.selectedPath == null) {
-      await widget.controller.playAt(0);
+    if (!widget.controller.isPlaying && widget.controller.selectedPath != null) {
+      await widget.controller.play();
     }
   }
 
