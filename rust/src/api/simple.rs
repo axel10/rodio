@@ -111,6 +111,11 @@ impl PlayerController {
         self.loaded_path = Some(path.to_string());
         self.loaded_duration = total;
         self.source_start_offset = clamped_offset;
+        // Invalidate stale waveform cache immediately so extraction cannot
+        // return a previous track while the new cache is still warming up.
+        self.cached_pcm = None;
+        self.cached_channels = 0;
+        self.cached_sample_rate = 0;
         self.clear_fft();
 
         // Start pre-caching PCM data in a background thread
@@ -492,6 +497,46 @@ where
     }
 }
 
+fn compute_waveform_from_pcm(
+    pcm: &[f32],
+    channels: usize,
+    expected_chunks: usize,
+    sample_stride: usize,
+) -> Vec<f32> {
+    let channels = channels.max(1);
+    let sample_stride = sample_stride.max(1);
+    let total_frames = pcm.len() / channels;
+
+    if total_frames == 0 {
+        return vec![0.0; expected_chunks];
+    }
+
+    let mut result = Vec::with_capacity(expected_chunks);
+
+    for chunk_index in 0..expected_chunks {
+        let start_frame = chunk_index * total_frames / expected_chunks;
+        let end_frame = (chunk_index + 1) * total_frames / expected_chunks;
+
+        let mut current_chunk_max = 0.0f32;
+        let mut frame_idx = start_frame;
+
+        while frame_idx < end_frame {
+            let sample_idx = frame_idx * channels;
+            for ch in 0..channels {
+                let abs_sample = pcm[sample_idx + ch].abs();
+                if abs_sample > current_chunk_max {
+                    current_chunk_max = abs_sample;
+                }
+            }
+            frame_idx += sample_stride;
+        }
+
+        result.push(current_chunk_max.min(1.0));
+    }
+
+    result
+}
+
 
 
 pub fn extract_loaded_waveform(
@@ -504,122 +549,37 @@ pub fn extract_loaded_waveform(
 
     let sample_stride = sample_stride.max(1);
 
-    // Try to use cached PCM data if available
-    let (pcm, channels, _sample_rate, path) = {
+    // Snapshot the currently loaded file path.
+    let path = {
         let c = controller()
             .lock()
             .map_err(|_| "player lock poisoned".to_string())?;
-        (
-            c.cached_pcm.clone(),
-            c.cached_channels,
-            c.cached_sample_rate,
-            c.loaded_path.clone(),
-        )
+        c
+            .loaded_path
+            .clone()
+            .ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?
     };
 
-    if let Some(pcm) = pcm {
-        let total_frames = pcm.len() / channels;
-        if total_frames == 0 {
-            return Ok(vec![0.0; expected_chunks]);
-        }
-
-        let frames_per_chunk = total_frames / expected_chunks;
-        let mut result = Vec::with_capacity(expected_chunks);
-
-        for chunk_index in 0..expected_chunks {
-            let start_frame = chunk_index * frames_per_chunk;
-            let end_frame = if chunk_index == expected_chunks - 1 {
-                total_frames
-            } else {
-                (chunk_index + 1) * frames_per_chunk
-            };
-
-            let mut current_chunk_max = 0.0f32;
-            let mut frame_idx = start_frame;
-            while frame_idx < end_frame {
-                let sample_idx = frame_idx * channels;
-                if sample_idx < pcm.len() {
-                    for ch in 0..channels {
-                        let s_idx = sample_idx + ch;
-                        if s_idx < pcm.len() {
-                            let abs_sample = pcm[s_idx].abs();
-                            if abs_sample > current_chunk_max {
-                                current_chunk_max = abs_sample;
-                            }
-                        }
-                    }
-                }
-                frame_idx += sample_stride;
-            }
-            result.push(current_chunk_max.min(1.0));
-        }
-        return Ok(result);
-    }
-
-    // Fallback if not cached
-    let path = path.ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?;
+    // No cache yet: decode the full file into memory in one shot (non-streaming).
     let file = File::open(&path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
-    let mut source = Decoder::try_from(file).map_err(|e| format!("decode failed: {}", e))?;
-
-    let total_duration = source
-        .total_duration()
-        .ok_or_else(|| "Unknown duration".to_string())?;
+    let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {}", e))?;
     let channels = source.channels().get() as usize;
-    let sample_rate = source.sample_rate().get() as f64;
+    let pcm: Vec<f32> = source.collect();
 
-    // Calculate total number of samples (per channel)
-    let total_samples = (total_duration.as_secs_f64() * sample_rate) as usize;
-    if total_samples == 0 {
-        return Ok(vec![0.0; expected_chunks]);
-    }
-
-    // Each chunk will cover this many samples (per channel)
-    let samples_per_chunk = total_samples / expected_chunks;
-    let skip_duration_per_stride = if sample_stride > 1 {
-        Some(Duration::from_secs_f64(
-            (sample_stride - 1) as f64 / (sample_rate as f64),
-        ))
-    } else {
-        None
-    };
-
-    let mut result = Vec::with_capacity(expected_chunks);
-
-    // Iterate linearly and evaluate one frame every `sample_stride` frames.
-    for _ in 0..expected_chunks {
-        let mut current_chunk_max = 0.0f32;
-        let mut samples_read = 0;
-
-        // Read frames belonging to this chunk.
-        while samples_read < samples_per_chunk {
-            let Some(frame_peak) = read_frame_abs_max(&mut source, channels) else {
-                break;
-            };
-            if frame_peak > current_chunk_max {
-                current_chunk_max = frame_peak;
-            }
-            samples_read += 1;
-
-            if let Some(skip_dur) = skip_duration_per_stride {
-                if samples_read < samples_per_chunk {
-                    let available_in_chunk = samples_per_chunk - samples_read;
-                    let to_skip_in_stride = sample_stride - 1;
-
-                    if available_in_chunk < to_skip_in_stride {
-                        let remaining_skip =
-                            Duration::from_secs_f64(available_in_chunk as f64 / (sample_rate as f64));
-                        source = source.skip_duration(remaining_skip).into_inner();
-                        samples_read += available_in_chunk;
-                    } else {
-                        source = source.skip_duration(skip_dur).into_inner();
-                        samples_read += to_skip_in_stride;
-                    }
-                }
-            }
+    {
+        // Ensure the decoded result still matches the active loaded file.
+        let c = controller()
+            .lock()
+            .map_err(|_| "player lock poisoned".to_string())?;
+        if c.loaded_path.as_deref() != Some(path.as_str()) {
+            return Err("loaded audio changed during waveform extraction, please retry".to_string());
         }
-
-        result.push(current_chunk_max.min(1.0));
     }
 
-    Ok(result)
+    Ok(compute_waveform_from_pcm(
+        &pcm,
+        channels,
+        expected_chunks,
+        sample_stride,
+    ))
 }
