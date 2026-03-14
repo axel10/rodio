@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `append_from_path`, `clear_fft`, `compute_fft`, `controller`, `ensure_audio_output`, `new`, `new`, `playback_position`, `push_mono_sample`, `read_frame_abs_max`, `with_player`
+// These functions are ignored because they are not marked as `pub`: `append_from_path`, `clear_fft`, `compute_fft`, `controller`, `ensure_audio_output`, `extract_waveform_from_path`, `fold_packet_peaks_to_chunks`, `new`, `new`, `playback_position`, `push_mono_sample`, `with_player`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FftSource`, `PlayerController`, `WaveformChunk`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `channels`, `clone`, `current_span_len`, `fmt`, `next`, `sample_rate`, `total_duration`, `try_seek`
 
@@ -48,6 +48,16 @@ Future<Float32List> extractLoadedWaveform({
   required BigInt expectedChunks,
   required BigInt sampleStride,
 }) => RustLib.instance.api.crateApiSimpleExtractLoadedWaveform(
+  expectedChunks: expectedChunks,
+  sampleStride: sampleStride,
+);
+
+Future<Float32List> extractWaveformForPath({
+  required String path,
+  required BigInt expectedChunks,
+  required BigInt sampleStride,
+}) => RustLib.instance.api.crateApiSimpleExtractWaveformForPath(
+  path: path,
   expectedChunks: expectedChunks,
   sampleStride: sampleStride,
 );

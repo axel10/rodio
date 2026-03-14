@@ -514,7 +514,8 @@ fn fold_packet_peaks_to_chunks(
     waveform
 }
 
-pub fn extract_loaded_waveform(
+fn extract_waveform_from_path(
+    path: &str,
     expected_chunks: usize,
     sample_stride: usize,
 ) -> Result<Vec<f32>, String> {
@@ -524,21 +525,10 @@ pub fn extract_loaded_waveform(
 
     let sample_stride = sample_stride.max(1);
 
-    // Snapshot the currently loaded file path.
-    let path = {
-        let c = controller()
-            .lock()
-            .map_err(|_| "player lock poisoned".to_string())?;
-        c
-            .loaded_path
-            .clone()
-            .ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?
-    };
-
     // Stream decode with Symphonia and aggregate per-packet peaks.
-    let file = File::open(&path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
+    let file = File::open(path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
     let mut hint = Hint::new();
-    if let Some(ext) = Path::new(&path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
 
@@ -623,6 +613,31 @@ pub fn extract_loaded_waveform(
         }
     }
 
+    let effective_total_ts = total_ts.or(Some(max_packet_end_ts.max(1)));
+    Ok(fold_packet_peaks_to_chunks(
+        &packet_peaks,
+        expected_chunks,
+        effective_total_ts,
+    ))
+}
+
+pub fn extract_loaded_waveform(
+    expected_chunks: usize,
+    sample_stride: usize,
+) -> Result<Vec<f32>, String> {
+    // Snapshot the currently loaded file path.
+    let path = {
+        let c = controller()
+            .lock()
+            .map_err(|_| "player lock poisoned".to_string())?;
+        c
+            .loaded_path
+            .clone()
+            .ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?
+    };
+
+    let waveform = extract_waveform_from_path(&path, expected_chunks, sample_stride)?;
+
     {
         // Ensure the decoded result still matches the active loaded file.
         let c = controller()
@@ -633,10 +648,16 @@ pub fn extract_loaded_waveform(
         }
     }
 
-    let effective_total_ts = total_ts.or(Some(max_packet_end_ts.max(1)));
-    Ok(fold_packet_peaks_to_chunks(
-        &packet_peaks,
-        expected_chunks,
-        effective_total_ts,
-    ))
+    Ok(waveform)
+}
+
+pub fn extract_waveform_for_path(
+    path: String,
+    expected_chunks: usize,
+    sample_stride: usize,
+) -> Result<Vec<f32>, String> {
+    if path.trim().is_empty() {
+        return Err("path is empty".to_string());
+    }
+    extract_waveform_from_path(&path, expected_chunks, sample_stride)
 }

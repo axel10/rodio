@@ -408,16 +408,20 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   /// [expectedChunks] controls the number of normalized amplitude samples (0.0 to 1.0).
   /// This uses Rust/Symphonia streaming decode and aggregates chunk peaks.
   /// [sampleStride] controls packet-step sampling (1 = process every packet).
+  /// When [filePath] is provided, extraction runs directly on that file path
+  /// without requiring it to be loaded or playing.
   Future<List<double>> getLoadedWaveform({
     required int expectedChunks,
     int sampleStride = 1,
+    String? filePath,
   }) async {
     if (expectedChunks <= 0) {
       _error = 'expectedChunks must be > 0.';
       notifyListeners();
       return const [];
     }
-    if (_selectedPath == null) {
+    final targetPath = filePath?.trim();
+    if ((targetPath == null || targetPath.isEmpty) && _selectedPath == null) {
       _error = 'No audio loaded for waveform extraction.';
       notifyListeners();
       return const [];
@@ -425,10 +429,16 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
 
     try {
       final clampedStride = sampleStride < 1 ? 1 : sampleStride;
-      final data = await extractLoadedWaveform(
-        expectedChunks: BigInt.from(expectedChunks),
-        sampleStride: BigInt.from(clampedStride),
-      );
+      final data = (targetPath != null && targetPath.isNotEmpty)
+          ? await extractWaveformForPath(
+              path: targetPath,
+              expectedChunks: BigInt.from(expectedChunks),
+              sampleStride: BigInt.from(clampedStride),
+            )
+          : await extractLoadedWaveform(
+              expectedChunks: BigInt.from(expectedChunks),
+              sampleStride: BigInt.from(clampedStride),
+            );
       return data.toList(growable: false);
     } catch (e) {
       _error = 'Waveform extraction failed: $e';
@@ -451,12 +461,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       notifyListeners();
       return const [];
     }
-    if (_selectedPath != filePath) {
-      await loadFromPath(filePath);
-    }
     return getLoadedWaveform(
       expectedChunks: outCount,
       sampleStride: sampleStride,
+      filePath: filePath,
     );
   }
 
