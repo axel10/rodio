@@ -333,14 +333,32 @@ pub fn seek_audio_ms(position_ms: i64) -> Result<(), String> {
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
 
+    let target_ms = position_ms.max(0) as u64;
+    let mut target = Duration::from_millis(target_ms);
+    if !c.loaded_duration.is_zero() {
+        target = target.min(c.loaded_duration);
+    }
+
+    if c.loaded_path.is_none() {
+        return Err("audio is not loaded".to_string());
+    }
+
+    // Fast path: seek the currently loaded source in-place.
+    let seek_result = c.with_player(|player| player.try_seek(target))?;
+    if seek_result.is_ok() {
+        c.source_start_offset = Duration::ZERO;
+        c.clear_fft();
+        return Ok(());
+    }
+
+    // Fallback for non-seekable decoders/sources: rebuild source at target offset.
     let path = c
         .loaded_path
         .clone()
         .ok_or_else(|| "audio is not loaded".to_string())?;
 
     let was_playing = c.with_player(|player| !player.is_paused() && !player.empty())?;
-    let target_ms = position_ms.max(0) as u64;
-    c.append_from_path(&path, Duration::from_millis(target_ms), was_playing)
+    c.append_from_path(&path, target, was_playing)
 }
 
 pub fn set_audio_volume(volume: f32) -> Result<(), String> {
