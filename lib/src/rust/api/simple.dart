@@ -6,18 +6,26 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `append_from_path`, `clear_fft`, `compute_fft`, `controller`, `ensure_audio_output`, `extract_waveform_from_path`, `fold_packet_peaks_to_chunks`, `new`, `new`, `playback_position`, `push_mono_sample`, `push_state`, `trigger_state_push`, `with_player`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FftSource`, `PlayerController`, `WaveformChunk`
+// These functions are ignored because they are not marked as `pub`: `any_deck_playing`, `apply_master_volume`, `clear_fft_buffer`, `clear`, `compute_fft`, `controller`, `create_player`, `describe_output_device`, `drive_crossfade`, `ensure_audio_output`, `extract_waveform_from_path`, `fold_packet_peaks_to_chunks`, `invalidate_waveform_cache`, `is_playing`, `maybe_switch_to_new_default_output`, `new`, `new`, `open_current_default_output`, `open_deck_from_path`, `pause_all`, `play_all`, `playback_position`, `playback_state`, `public_deck`, `public_path`, `public_position`, `push_mono_sample`, `push_state`, `replace_current_from_path`, `set_master_volume`, `settle_to_public_deck`, `start_crossfade`, `start_default_output_monitor`, `toggle_all`, `trigger_state_push`, `warm_waveform_cache_for_public_path`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FftSource`, `PlaybackDeck`, `PlayerController`, `WaveformChunk`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `channels`, `clone`, `clone`, `current_span_len`, `fmt`, `fmt`, `next`, `sample_rate`, `total_duration`, `try_seek`
 
 String greet({required String name}) =>
     RustLib.instance.api.crateApiSimpleGreet(name: name);
 
-Stream<PlaybackState> subscribePlaybackState() =>
-    RustLib.instance.api.crateApiSimpleSubscribePlaybackState();
-
 Future<void> loadAudioFile({required String path}) =>
     RustLib.instance.api.crateApiSimpleLoadAudioFile(path: path);
+
+Future<void> crossfadeToAudioFile({
+  required String path,
+  required PlatformInt64 durationMs,
+}) => RustLib.instance.api.crateApiSimpleCrossfadeToAudioFile(
+  path: path,
+  durationMs: durationMs,
+);
+
+Stream<PlaybackState> subscribePlaybackState() =>
+    RustLib.instance.api.crateApiSimpleSubscribePlaybackState();
 
 Future<void> playAudio() => RustLib.instance.api.crateApiSimplePlayAudio();
 

@@ -19,6 +19,7 @@ const FFT_SIZE: usize = 1024;
 const RAW_FFT_BINS: usize = FFT_SIZE / 2;
 const PLAYBACK_STATE_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+const CROSSFADE_TICK_INTERVAL: Duration = Duration::from_millis(16);
 
 static PLAYER_CONTROLLER: OnceLock<Mutex<PlayerController>> = OnceLock::new();
 static DEFAULT_OUTPUT_MONITOR: OnceLock<()> = OnceLock::new();
@@ -36,15 +37,49 @@ pub struct PlaybackState {
     pub path: Option<String>,
 }
 
-struct PlayerController {
-    sink: Option<MixerDeviceSink>,
-    player: Option<Player>,
-    active_output_device_name: Option<String>,
+struct PlaybackDeck {
+    player: Arc<Player>,
     latest_fft: Arc<Mutex<Vec<f32>>>,
-    loaded_path: Option<String>,
+    loaded_path: String,
     loaded_duration: Duration,
     source_start_offset: Duration,
+    gain: f32,
+}
+
+impl PlaybackDeck {
+    fn playback_position(&self) -> Duration {
+        let mut pos = self
+            .source_start_offset
+            .saturating_add(self.player.get_pos());
+        if !self.loaded_duration.is_zero() {
+            pos = pos.min(self.loaded_duration);
+        }
+        pos
+    }
+
+    fn is_playing(&self) -> bool {
+        !self.player.is_paused() && !self.player.empty()
+    }
+
+    fn apply_master_volume(&self, master_volume: f32) {
+        self.player
+            .set_volume((master_volume * self.gain).clamp(0.0, 1.0));
+    }
+
+    fn clear(&self) {
+        self.player.clear();
+        self.player.pause();
+        clear_fft_buffer(&self.latest_fft);
+    }
+}
+
+struct PlayerController {
+    sink: Option<MixerDeviceSink>,
+    active_output_device_name: Option<String>,
+    current_deck: Option<PlaybackDeck>,
+    incoming_deck: Option<PlaybackDeck>,
     volume: f32,
+    transition_generation: u64,
     cached_pcm: Option<Arc<Vec<f32>>>,
     cached_channels: usize,
     cached_sample_rate: u32,
@@ -54,13 +89,11 @@ impl PlayerController {
     fn new() -> Self {
         Self {
             sink: None,
-            player: None,
             active_output_device_name: None,
-            latest_fft: Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS])),
-            loaded_path: None,
-            loaded_duration: Duration::ZERO,
-            source_start_offset: Duration::ZERO,
+            current_deck: None,
+            incoming_deck: None,
             volume: 1.0,
+            transition_generation: 0,
             cached_pcm: None,
             cached_channels: 0,
             cached_sample_rate: 0,
@@ -68,19 +101,18 @@ impl PlayerController {
     }
 
     fn ensure_audio_output(&mut self) -> Result<(), String> {
-        if self.sink.is_some() && self.player.is_some() {
+        if self.sink.is_some() {
             return Ok(());
         }
 
-        let (sink, player, device_name) = Self::open_current_default_output()?;
+        let (sink, device_name) = Self::open_current_default_output()?;
 
         self.sink = Some(sink);
-        self.player = Some(player);
         self.active_output_device_name = Some(device_name);
         Ok(())
     }
 
-    fn open_current_default_output() -> Result<(MixerDeviceSink, Player, String), String> {
+    fn open_current_default_output() -> Result<(MixerDeviceSink, String), String> {
         let device = cpal::default_host()
             .default_output_device()
             .ok_or_else(|| "no default audio output device available".to_string())?;
@@ -89,32 +121,81 @@ impl PlayerController {
             .map_err(|e| format!("open default audio device failed: {e}"))?
             .open_stream()
             .map_err(|e| format!("open default audio device failed: {e}"))?;
-        let player = Player::connect_new(&sink.mixer());
-        Ok((sink, player, device_name))
+        Ok((sink, device_name))
     }
 
-    fn with_player<F, T>(&self, f: F) -> Result<T, String>
-    where
-        F: FnOnce(&Player) -> T,
-    {
-        self.player
+    fn create_player(&self) -> Result<Arc<Player>, String> {
+        let sink = self
+            .sink
             .as_ref()
-            .map(f)
-            .ok_or_else(|| "player is not initialized".to_string())
+            .ok_or_else(|| "audio output is not initialized".to_string())?;
+        Ok(Arc::new(Player::connect_new(&sink.mixer())))
     }
 
-    fn clear_fft(&self) {
-        if let Ok(mut shared) = self.latest_fft.lock() {
-            shared.fill(0.0);
-        }
+    fn public_deck(&self) -> Option<&PlaybackDeck> {
+        self.incoming_deck.as_ref().or(self.current_deck.as_ref())
     }
 
-    fn append_from_path(
+    fn public_path(&self) -> Option<&str> {
+        self.public_deck().map(|deck| deck.loaded_path.as_str())
+    }
+
+    fn public_position(&self) -> Duration {
+        self.public_deck()
+            .map(PlaybackDeck::playback_position)
+            .unwrap_or(Duration::ZERO)
+    }
+
+    fn any_deck_playing(&self) -> bool {
+        self.current_deck
+            .as_ref()
+            .map(PlaybackDeck::is_playing)
+            .unwrap_or(false)
+            || self
+                .incoming_deck
+                .as_ref()
+                .map(PlaybackDeck::is_playing)
+                .unwrap_or(false)
+    }
+
+    fn invalidate_waveform_cache(&mut self) {
+        self.cached_pcm = None;
+        self.cached_channels = 0;
+        self.cached_sample_rate = 0;
+    }
+
+    fn warm_waveform_cache_for_public_path(&mut self) {
+        self.invalidate_waveform_cache();
+
+        let Some(path) = self.public_path().map(str::to_string) else {
+            return;
+        };
+
+        thread::spawn(move || {
+            if let Ok(file) = File::open(&path) {
+                if let Ok(source) = Decoder::try_from(file) {
+                    let channels = source.channels().get() as usize;
+                    let sample_rate = source.sample_rate().get();
+                    let pcm: Vec<f32> = source.collect();
+                    if let Ok(mut c) = controller().lock() {
+                        if c.public_path() == Some(path.as_str()) {
+                            c.cached_pcm = Some(Arc::new(pcm));
+                            c.cached_channels = channels;
+                            c.cached_sample_rate = sample_rate;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn open_deck_from_path(
         &mut self,
         path: &str,
         start_offset: Duration,
         auto_play: bool,
-    ) -> Result<(), String> {
+        gain: f32,
+    ) -> Result<PlaybackDeck, String> {
         self.ensure_audio_output()?;
 
         let file = File::open(path).map_err(|e| format!("open file failed: {e}"))?;
@@ -127,86 +208,152 @@ impl PlayerController {
             start_offset.min(total)
         };
 
-        self.with_player(|player| {
-            player.clear();
-            player.set_volume(self.volume);
-            if clamped_offset > Duration::ZERO {
-                player.append(FftSource::new(
-                    source.skip_duration(clamped_offset),
-                    Arc::clone(&self.latest_fft),
-                ));
-            } else {
-                player.append(FftSource::new(source, Arc::clone(&self.latest_fft)));
-            }
-            if auto_play {
-                player.play();
-            } else {
-                player.pause();
-            }
-        })?;
+        let latest_fft = Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS]));
+        clear_fft_buffer(&latest_fft);
+        let player = self.create_player()?;
+        player.set_volume((self.volume * gain).clamp(0.0, 1.0));
+        if clamped_offset > Duration::ZERO {
+            player.append(FftSource::new(
+                source.skip_duration(clamped_offset),
+                Arc::clone(&latest_fft),
+            ));
+        } else {
+            player.append(FftSource::new(source, Arc::clone(&latest_fft)));
+        }
+        if auto_play {
+            player.play();
+        } else {
+            player.pause();
+        }
 
-        self.loaded_path = Some(path.to_string());
-        self.loaded_duration = total;
-        self.source_start_offset = clamped_offset;
-        // Invalidate stale waveform cache immediately so extraction cannot
-        // return a previous track while the new cache is still warming up.
-        self.cached_pcm = None;
-        self.cached_channels = 0;
-        self.cached_sample_rate = 0;
-        self.clear_fft();
+        Ok(PlaybackDeck {
+            player,
+            latest_fft,
+            loaded_path: path.to_string(),
+            loaded_duration: total,
+            source_start_offset: clamped_offset,
+            gain,
+        })
+    }
 
-        // Start pre-caching PCM data in a background thread
-        let path_clone = path.to_string();
-        std::thread::spawn(move || {
-            if let Ok(file) = File::open(&path_clone) {
-                if let Ok(source) = Decoder::try_from(file) {
-                    let channels = source.channels().get() as usize;
-                    let sample_rate = source.sample_rate().get();
-                    let pcm: Vec<f32> = source.collect();
-                    if let Ok(mut c) = controller().lock() {
-                        if c.loaded_path.as_deref() == Some(&path_clone) {
-                            c.cached_pcm = Some(Arc::new(pcm));
-                            c.cached_channels = channels;
-                            c.cached_sample_rate = sample_rate;
-                        }
-                    }
-                }
+    fn replace_current_from_path(
+        &mut self,
+        path: &str,
+        start_offset: Duration,
+        auto_play: bool,
+    ) -> Result<(), String> {
+        let deck = self.open_deck_from_path(path, start_offset, auto_play, 1.0)?;
+
+        self.transition_generation = self.transition_generation.wrapping_add(1);
+        if let Some(incoming) = self.incoming_deck.take() {
+            incoming.clear();
+        }
+        if let Some(current) = self.current_deck.replace(deck) {
+            current.clear();
+        }
+        self.warm_waveform_cache_for_public_path();
+        Ok(())
+    }
+
+    fn settle_to_public_deck(&mut self) {
+        self.transition_generation = self.transition_generation.wrapping_add(1);
+        if let Some(mut incoming) = self.incoming_deck.take() {
+            incoming.gain = 1.0;
+            incoming.apply_master_volume(self.volume);
+            if let Some(current) = self.current_deck.take() {
+                current.clear();
             }
+            self.current_deck = Some(incoming);
+        }
+        self.warm_waveform_cache_for_public_path();
+    }
+
+    fn playback_state(&self) -> PlaybackState {
+        let public_deck = self.public_deck();
+        let is_playing = public_deck.map(PlaybackDeck::is_playing).unwrap_or(false);
+
+        PlaybackState {
+            position_ms: self.public_position().as_millis().min(i64::MAX as u128) as i64,
+            duration_ms: public_deck
+                .map(|deck| deck.loaded_duration.as_millis().min(i64::MAX as u128) as i64)
+                .unwrap_or(0),
+            is_playing,
+            volume: self.volume,
+            path: public_deck.map(|deck| deck.loaded_path.clone()),
+        }
+    }
+
+    fn play_all(&self) {
+        if let Some(current) = self.current_deck.as_ref() {
+            current.player.play();
+        }
+        if let Some(incoming) = self.incoming_deck.as_ref() {
+            incoming.player.play();
+        }
+    }
+
+    fn pause_all(&self) {
+        if let Some(current) = self.current_deck.as_ref() {
+            current.player.pause();
+        }
+        if let Some(incoming) = self.incoming_deck.as_ref() {
+            incoming.player.pause();
+        }
+    }
+
+    fn toggle_all(&self) -> Result<bool, String> {
+        let public_deck = self
+            .public_deck()
+            .ok_or_else(|| "player is not initialized".to_string())?;
+        if public_deck.player.is_paused() {
+            self.play_all();
+            Ok(true)
+        } else {
+            self.pause_all();
+            Ok(false)
+        }
+    }
+
+    fn set_master_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        if let Some(current) = self.current_deck.as_ref() {
+            current.apply_master_volume(self.volume);
+        }
+        if let Some(incoming) = self.incoming_deck.as_ref() {
+            incoming.apply_master_volume(self.volume);
+        }
+    }
+
+    fn start_crossfade(&mut self, path: &str, duration: Duration) -> Result<(), String> {
+        if self.current_deck.is_none() || !self.any_deck_playing() || duration.is_zero() {
+            return self.replace_current_from_path(path, Duration::ZERO, true);
+        }
+
+        let mut incoming = self.open_deck_from_path(path, Duration::ZERO, true, 0.0)?;
+        incoming.gain = 0.0;
+        incoming.apply_master_volume(self.volume);
+
+        self.transition_generation = self.transition_generation.wrapping_add(1);
+        let generation = self.transition_generation;
+
+        if let Some(previous_incoming) = self.incoming_deck.replace(incoming) {
+            previous_incoming.clear();
+        }
+        if let Some(current) = self.current_deck.as_mut() {
+            current.gain = 1.0;
+            current.apply_master_volume(self.volume);
+        }
+        self.warm_waveform_cache_for_public_path();
+
+        thread::spawn(move || {
+            drive_crossfade(generation, duration);
         });
 
         Ok(())
     }
 
-    fn playback_position(&self) -> Duration {
-        let Some(player) = self.player.as_ref() else {
-            return Duration::ZERO;
-        };
-
-        let mut pos = self.source_start_offset.saturating_add(player.get_pos());
-        if !self.loaded_duration.is_zero() {
-            pos = pos.min(self.loaded_duration);
-        }
-        pos
-    }
-
-    fn playback_state(&self) -> PlaybackState {
-        let is_playing = self
-            .player
-            .as_ref()
-            .map(|player| !player.is_paused() && !player.empty())
-            .unwrap_or(false);
-
-        PlaybackState {
-            position_ms: self.playback_position().as_millis().min(i64::MAX as u128) as i64,
-            duration_ms: self.loaded_duration.as_millis().min(i64::MAX as u128) as i64,
-            is_playing,
-            volume: self.volume,
-            path: self.loaded_path.clone(),
-        }
-    }
-
     fn maybe_switch_to_new_default_output(&mut self) -> Result<(), String> {
-        if self.sink.is_none() || self.player.is_none() {
+        if self.sink.is_none() {
             return Ok(());
         }
 
@@ -219,24 +366,67 @@ impl PlayerController {
             return Ok(());
         }
 
-        let playback_position = self.playback_position();
-        let loaded_path = self.loaded_path.clone();
-        let was_playing = self
-            .player
-            .as_ref()
-            .map(|player| !player.is_paused() && !player.empty())
-            .unwrap_or(false);
+        let playback_position = self.public_position();
+        let loaded_path = self.public_path().map(str::to_string);
+        let was_playing = self.any_deck_playing();
 
-        let (sink, player, device_name) = Self::open_current_default_output()?;
+        self.transition_generation = self.transition_generation.wrapping_add(1);
+        if let Some(incoming) = self.incoming_deck.take() {
+            incoming.clear();
+        }
+        if let Some(current) = self.current_deck.take() {
+            current.clear();
+        }
+
+        let (sink, device_name) = Self::open_current_default_output()?;
         self.sink = Some(sink);
-        self.player = Some(player);
         self.active_output_device_name = Some(device_name);
 
         if let Some(path) = loaded_path {
-            self.append_from_path(&path, playback_position, was_playing)?;
+            self.replace_current_from_path(&path, playback_position, was_playing)?;
         }
 
         Ok(())
+    }
+}
+
+fn clear_fft_buffer(latest_fft: &Arc<Mutex<Vec<f32>>>) {
+    if let Ok(mut shared) = latest_fft.lock() {
+        shared.fill(0.0);
+    }
+}
+
+fn drive_crossfade(generation: u64, duration: Duration) {
+    let steps =
+        ((duration.as_millis() / CROSSFADE_TICK_INTERVAL.as_millis().max(1)).max(1)) as usize;
+
+    for step in 1..=steps {
+        thread::sleep(CROSSFADE_TICK_INTERVAL);
+
+        let Ok(mut c) = controller().lock() else {
+            return;
+        };
+        if c.transition_generation != generation {
+            return;
+        }
+
+        let progress = step as f32 / steps as f32;
+        let master_volume = c.volume;
+        if let Some(current) = c.current_deck.as_mut() {
+            current.gain = (1.0 - progress).clamp(0.0, 1.0);
+            current.apply_master_volume(master_volume);
+        }
+        if let Some(incoming) = c.incoming_deck.as_mut() {
+            incoming.gain = progress.clamp(0.0, 1.0);
+            incoming.apply_master_volume(master_volume);
+        }
+    }
+
+    if let Ok(mut c) = controller().lock() {
+        if c.transition_generation != generation {
+            return;
+        }
+        c.settle_to_public_deck();
     }
 }
 
@@ -439,7 +629,15 @@ pub fn load_audio_file(path: String) -> Result<(), String> {
     let mut c = controller()
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
-    c.append_from_path(&path, Duration::ZERO, false)
+    c.replace_current_from_path(&path, Duration::ZERO, false)
+}
+
+pub fn crossfade_to_audio_file(path: String, duration_ms: i64) -> Result<(), String> {
+    let mut c = controller()
+        .lock()
+        .map_err(|_| "player lock poisoned".to_string())?;
+    let duration = Duration::from_millis(duration_ms.max(0) as u64);
+    c.start_crossfade(&path, duration)
 }
 
 pub fn subscribe_playback_state(
@@ -463,9 +661,10 @@ pub fn play_audio() -> Result<(), String> {
     let c = controller()
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
-    c.with_player(|player| {
-        player.play();
-    })?;
+    if c.public_deck().is_none() {
+        return Err("player is not initialized".to_string());
+    }
+    c.play_all();
     Ok(())
 }
 
@@ -473,9 +672,10 @@ pub fn pause_audio() -> Result<(), String> {
     let c = controller()
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
-    c.with_player(|player| {
-        player.pause();
-    })?;
+    if c.public_deck().is_none() {
+        return Err("player is not initialized".to_string());
+    }
+    c.pause_all();
     Ok(())
 }
 
@@ -483,15 +683,7 @@ pub fn toggle_audio() -> Result<bool, String> {
     let c = controller()
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
-    c.with_player(|player| {
-        if player.is_paused() {
-            player.play();
-            true
-        } else {
-            player.pause();
-            false
-        }
-    })
+    c.toggle_all()
 }
 
 pub fn seek_audio_ms(position_ms: i64) -> Result<(), String> {
@@ -499,32 +691,30 @@ pub fn seek_audio_ms(position_ms: i64) -> Result<(), String> {
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
 
+    c.settle_to_public_deck();
+
     let target_ms = position_ms.max(0) as u64;
     let mut target = Duration::from_millis(target_ms);
-    if !c.loaded_duration.is_zero() {
-        target = target.min(c.loaded_duration);
-    }
-
-    if c.loaded_path.is_none() {
+    let Some(current) = c.current_deck.as_mut() else {
         return Err("audio is not loaded".to_string());
+    };
+
+    if !current.loaded_duration.is_zero() {
+        target = target.min(current.loaded_duration);
     }
 
     // Fast path: seek the currently loaded source in-place.
-    let seek_result = c.with_player(|player| player.try_seek(target))?;
+    let seek_result = current.player.try_seek(target);
     if seek_result.is_ok() {
-        c.source_start_offset = Duration::ZERO;
-        c.clear_fft();
+        current.source_start_offset = Duration::ZERO;
+        clear_fft_buffer(&current.latest_fft);
         return Ok(());
     }
 
     // Fallback for non-seekable decoders/sources: rebuild source at target offset.
-    let path = c
-        .loaded_path
-        .clone()
-        .ok_or_else(|| "audio is not loaded".to_string())?;
-
-    let was_playing = c.with_player(|player| !player.is_paused() && !player.empty())?;
-    c.append_from_path(&path, target, was_playing)
+    let path = current.loaded_path.clone();
+    let was_playing = current.is_playing();
+    c.replace_current_from_path(&path, target, was_playing)
 }
 
 pub fn set_audio_volume(volume: f32) -> Result<(), String> {
@@ -532,11 +722,7 @@ pub fn set_audio_volume(volume: f32) -> Result<(), String> {
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
 
-    let clamped = volume.clamp(0.0, 1.0);
-    c.volume = clamped;
-    c.with_player(|player| {
-        player.set_volume(clamped);
-    })?;
+    c.set_master_volume(volume);
     Ok(())
 }
 
@@ -545,29 +731,25 @@ pub fn dispose_audio() -> Result<(), String> {
         .lock()
         .map_err(|_| "player lock poisoned".to_string())?;
 
-    if let Some(player) = c.player.as_ref() {
-        player.clear();
-        player.pause();
+    c.transition_generation = c.transition_generation.wrapping_add(1);
+    if let Some(incoming) = c.incoming_deck.take() {
+        incoming.clear();
     }
-    c.loaded_path = None;
-    c.loaded_duration = Duration::ZERO;
-    c.source_start_offset = Duration::ZERO;
+    if let Some(current) = c.current_deck.take() {
+        current.clear();
+    }
     c.active_output_device_name = None;
     c.sink = None;
-    c.player = None;
     c.cached_pcm = None;
     c.cached_channels = 0;
     c.cached_sample_rate = 0;
-    c.clear_fft();
     Ok(())
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn is_audio_playing() -> bool {
     if let Ok(c) = controller().lock() {
-        if let Some(player) = c.player.as_ref() {
-            return !player.is_paused() && !player.empty();
-        }
+        return c.any_deck_playing();
     }
     false
 }
@@ -575,7 +757,9 @@ pub fn is_audio_playing() -> bool {
 #[flutter_rust_bridge::frb(sync)]
 pub fn get_audio_duration_ms() -> i64 {
     if let Ok(c) = controller().lock() {
-        return c.loaded_duration.as_millis().min(i64::MAX as u128) as i64;
+        if let Some(deck) = c.public_deck() {
+            return deck.loaded_duration.as_millis().min(i64::MAX as u128) as i64;
+        }
     }
     0
 }
@@ -583,7 +767,7 @@ pub fn get_audio_duration_ms() -> i64 {
 #[flutter_rust_bridge::frb(sync)]
 pub fn get_audio_position_ms() -> i64 {
     if let Ok(c) = controller().lock() {
-        return c.playback_position().as_millis().min(i64::MAX as u128) as i64;
+        return c.public_position().as_millis().min(i64::MAX as u128) as i64;
     }
     0
 }
@@ -591,8 +775,10 @@ pub fn get_audio_position_ms() -> i64 {
 #[flutter_rust_bridge::frb(sync)]
 pub fn get_latest_fft() -> Vec<f32> {
     if let Ok(c) = controller().lock() {
-        if let Ok(fft) = c.latest_fft.lock() {
-            return fft.clone();
+        if let Some(deck) = c.public_deck() {
+            if let Ok(fft) = deck.latest_fft.lock() {
+                return fft.clone();
+            }
         }
     }
     vec![0.0; RAW_FFT_BINS]
@@ -601,7 +787,7 @@ pub fn get_latest_fft() -> Vec<f32> {
 #[flutter_rust_bridge::frb(sync)]
 pub fn get_loaded_audio_path() -> Option<String> {
     if let Ok(c) = controller().lock() {
-        return c.loaded_path.clone();
+        return c.public_path().map(str::to_string);
     }
     None
 }
@@ -770,8 +956,8 @@ pub fn extract_loaded_waveform(
         let c = controller()
             .lock()
             .map_err(|_| "player lock poisoned".to_string())?;
-        c.loaded_path
-            .clone()
+        c.public_path()
+            .map(str::to_string)
             .ok_or_else(|| "No loaded audio file to extract waveform from".to_string())?
     };
 
@@ -782,7 +968,7 @@ pub fn extract_loaded_waveform(
         let c = controller()
             .lock()
             .map_err(|_| "player lock poisoned".to_string())?;
-        if c.loaded_path.as_deref() != Some(path.as_str()) {
+        if c.public_path() != Some(path.as_str()) {
             return Err(
                 "loaded audio changed during waveform extraction, please retry".to_string(),
             );

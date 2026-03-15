@@ -40,6 +40,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     this.fftSize = 1024,
     this.analysisFrequencyHz = 30.0,
     Duration fadeDuration = Duration.zero,
+    FadeMode fadeMode = FadeMode.sequential,
     VisualizerOptimizationOptions visualOptions =
         const VisualizerOptimizationOptions(),
   }) : assert(fftSize > 0),
@@ -50,6 +51,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
        assert(visualOptions.groupContrastExponent > 0) {
     _fftProcessor = FftProcessor(fftSize: fftSize, options: visualOptions);
     _fadeDuration = fadeDuration;
+    _fadeMode = fadeMode;
   }
 
   /// FFT size requested from native analysis.
@@ -79,6 +81,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   double _volume = 1.0;
   double _appliedNativeVolume = 1.0;
   Duration _fadeDuration = Duration.zero;
+  FadeMode _fadeMode = FadeMode.sequential;
   int _fadeSequence = 0;
   bool _trackFadeTransitionActive = false;
   PlayerState _playerState = PlayerState.idle;
@@ -122,6 +125,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
 
   /// Fade duration applied when switching tracks.
   Duration get fadeDuration => _fadeDuration;
+
+  /// Transition strategy used when switching tracks.
+  FadeMode get fadeMode => _fadeMode;
 
   /// Current playback status.
   PlayerState get currentState => _playerState;
@@ -386,6 +392,12 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   void setFadeDuration(Duration duration) {
     assert(!duration.isNegative);
     _fadeDuration = duration.isNegative ? Duration.zero : duration;
+    notifyListeners();
+  }
+
+  /// Sets the transition strategy used when switching tracks.
+  void setFadeMode(FadeMode mode) {
+    _fadeMode = mode;
     notifyListeners();
   }
 
@@ -1375,14 +1387,49 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     final previousPath = _selectedPath;
     final switchingTracks = previousPath != null && previousPath != uri;
     final shouldFade = switchingTracks && _fadeDuration > Duration.zero;
+    final shouldCrossfade =
+        shouldFade &&
+        _fadeMode == FadeMode.crossfade &&
+        _isPlaying &&
+        autoPlay &&
+        position == null;
+    final shouldSequentialFade = shouldFade && !shouldCrossfade;
     final fadeSequence = ++_fadeSequence;
-    final activateFadeTracking = shouldFade && (_isPlaying || autoPlay);
+    final activateFadeTracking =
+        shouldSequentialFade && (_isPlaying || autoPlay);
     if (activateFadeTracking) {
       _trackFadeTransitionActive = true;
     }
 
     try {
-      if (shouldFade && _isPlaying) {
+      if (shouldCrossfade) {
+        _playlistInternalLoad = true;
+        try {
+          await crossfadeToAudioFile(
+            path: uri,
+            durationMs: _fadeDuration.inMilliseconds,
+          );
+        } finally {
+          _playlistInternalLoad = false;
+        }
+        if (_fadeSequence != fadeSequence) {
+          return;
+        }
+
+        final durationMs = getAudioDurationMs();
+        _selectedPath = uri;
+        _position = Duration.zero;
+        _duration = Duration(milliseconds: durationMs.toInt());
+        _isPlaying = true;
+        _syncLocalPositionAnchor();
+        _playerState = PlayerState.playing;
+        _resetFftState();
+        _emitPlaylistState();
+        notifyListeners();
+        return;
+      }
+
+      if (shouldSequentialFade && _isPlaying) {
         final fadedOut = await _fadeNativeVolume(
           from: _appliedNativeVolume,
           to: 0.0,
@@ -1398,7 +1445,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       try {
         await _loadFromPathInternal(
           uri,
-          nativeVolume: shouldFade && autoPlay ? 0.0 : _volume,
+          nativeVolume: shouldSequentialFade && autoPlay ? 0.0 : _volume,
         );
       } finally {
         _playlistInternalLoad = false;
@@ -1411,7 +1458,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
       }
       if (autoPlay) {
         await play();
-        if (shouldFade) {
+        if (shouldSequentialFade) {
           final fadedIn = await _fadeNativeVolume(
             from: _appliedNativeVolume,
             to: _volume,
@@ -1677,7 +1724,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     }
 
     if (_playlistMode == PlaylistMode.autoQueueLoop && _playlists.length > 1) {
-      final currentIdx = _playlists.indexWhere((p) => p.id == _activePlaylistId);
+      final currentIdx = _playlists.indexWhere(
+        (p) => p.id == _activePlaylistId,
+      );
       if (currentIdx >= 0) {
         final visiblePlaylists = _playlists
             .where((p) => p.id != _defaultPlaylistId)
@@ -1686,7 +1735,8 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
           final activeVisibleIdx = visiblePlaylists.indexWhere(
             (p) => p.id == _activePlaylistId,
           );
-          final nextVisibleIdx = (activeVisibleIdx + 1) % visiblePlaylists.length;
+          final nextVisibleIdx =
+              (activeVisibleIdx + 1) % visiblePlaylists.length;
           await setActivePlaylistById(
             visiblePlaylists[nextVisibleIdx].id,
             autoPlay: true,

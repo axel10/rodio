@@ -73,6 +73,15 @@ enum PlaylistMode {
   autoQueueLoop,
 }
 
+/// Track transition mode.
+enum FadeMode {
+  /// Fade out the old track, then start and fade in the new one.
+  sequential,
+
+  /// Keep both tracks alive and overlap them during the transition window.
+  crossfade,
+}
+
 /// Repeat behavior used by playlist playback.
 /// @deprecated Use [PlaylistMode] instead.
 enum RepeatMode { off, one, all }
