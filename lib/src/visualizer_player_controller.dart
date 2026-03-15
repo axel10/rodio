@@ -267,6 +267,13 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
   /// Starts playback of the currently loaded track.
   Future<void> play() async {
     try {
+      final reachedEnd =
+          _selectedPath != null &&
+          _duration > Duration.zero &&
+          _position.inMilliseconds >= (_duration.inMilliseconds - 250);
+      if (!_isPlaying && reachedEnd) {
+        await seek(Duration.zero);
+      }
       await playAudio();
       _isPlaying = true;
       _syncLocalPositionAnchor();
@@ -300,12 +307,43 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     if (_selectedPath == null) {
       return;
     }
+    final requestedTrackEnd =
+        _duration > Duration.zero &&
+        target.inMilliseconds >= (_duration.inMilliseconds - 250);
+    if (requestedTrackEnd) {
+      await _advanceAfterTrackEnd();
+      return;
+    }
+    final reachedEndBeforeSeek =
+        !_isPlaying &&
+        _duration > Duration.zero &&
+        _position.inMilliseconds >= (_duration.inMilliseconds - 250);
+    if (reachedEndBeforeSeek &&
+        target < _duration &&
+        _currentIndex != null &&
+        _currentIndex! >= 0 &&
+        _currentIndex! < _activePlaylistTracks.length) {
+      await _loadCurrentTrack(autoPlay: false, position: target);
+      return;
+    }
     _suppressAutoAdvanceFor(const Duration(milliseconds: 600));
-    final ms = target.inMilliseconds.clamp(0, _duration.inMilliseconds);
+    final durationMs = _duration.inMilliseconds;
+    var ms = target.inMilliseconds.clamp(0, durationMs);
+    // Avoid seeking to the exact EOF because some backends treat that as an
+    // exhausted source, which then refuses further seek/play operations.
+    if (durationMs > 1 && ms >= durationMs) {
+      ms = durationMs - 1;
+    }
     try {
       await seekAudioMs(positionMs: ms);
       _position = Duration(milliseconds: ms);
-      _syncLocalPositionAnchor();
+      if (_isPlaying) {
+        _syncLocalPositionAnchor();
+        _playerState = PlayerState.playing;
+      } else {
+        _resetLocalPositionAnchor();
+        _playerState = PlayerState.paused;
+      }
     } catch (e) {
       _error = 'Seek failed: $e';
     }
@@ -1435,8 +1473,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     if (candidate >= 0 && candidate < _playOrder.length) {
       return _playOrder[candidate];
     }
-    if (_playlistMode == PlaylistMode.queueLoop ||
-        _playlistMode == PlaylistMode.autoQueueLoop) {
+    if (_playlistMode == PlaylistMode.queueLoop) {
       return next ? _playOrder.first : _playOrder.last;
     }
     return null;
@@ -1496,50 +1533,58 @@ class AudioVisualizerPlayerController extends ChangeNotifier {
     }
     _autoTransitionInFlight = true;
     try {
-      if (_playlistMode == PlaylistMode.single) {
-        await _loadCurrentTrack(autoPlay: false, position: Duration.zero);
-        return;
-      }
-
-      if (_playlistMode == PlaylistMode.singleLoop) {
-        await seek(Duration.zero);
-        await play();
-        return;
-      }
-
-      final moved = await playNext(reason: PlaybackReason.ended);
-      if (!moved) {
-        if (_playlistMode == PlaylistMode.autoQueueLoop &&
-            _playlists.length > 1) {
-          // Advance to next playlist
-          final currentIdx = _playlists.indexWhere(
-            (p) => p.id == _activePlaylistId,
-          );
-          if (currentIdx >= 0) {
-            // Skip __default__ if it's the next one and not empty, or just handle visible
-            final visiblePlaylists = _playlists
-                .where((p) => p.id != _defaultPlaylistId)
-                .toList();
-            if (visiblePlaylists.isNotEmpty) {
-              final activeVisibleIdx = visiblePlaylists.indexWhere(
-                (p) => p.id == _activePlaylistId,
-              );
-              final nextVisibleIdx =
-                  (activeVisibleIdx + 1) % visiblePlaylists.length;
-              await setActivePlaylistById(
-                visiblePlaylists[nextVisibleIdx].id,
-                autoPlay: true,
-              );
-              return;
-            }
-          }
-        }
-        _isPlaying = false;
-        notifyListeners();
-      }
+      await _advanceAfterTrackEnd();
     } finally {
       _autoTransitionInFlight = false;
     }
+  }
+
+  Future<void> _advanceAfterTrackEnd() async {
+    if (_playlistMode == PlaylistMode.single) {
+      _isPlaying = false;
+      _resetLocalPositionAnchor();
+      _playerState = PlayerState.completed;
+      _emitPlaylistState();
+      notifyListeners();
+      return;
+    }
+
+    if (_playlistMode == PlaylistMode.singleLoop) {
+      await seek(Duration.zero);
+      await play();
+      return;
+    }
+
+    final moved = await playNext(reason: PlaybackReason.ended);
+    if (moved) {
+      return;
+    }
+
+    if (_playlistMode == PlaylistMode.autoQueueLoop && _playlists.length > 1) {
+      final currentIdx = _playlists.indexWhere((p) => p.id == _activePlaylistId);
+      if (currentIdx >= 0) {
+        final visiblePlaylists = _playlists
+            .where((p) => p.id != _defaultPlaylistId)
+            .toList();
+        if (visiblePlaylists.isNotEmpty) {
+          final activeVisibleIdx = visiblePlaylists.indexWhere(
+            (p) => p.id == _activePlaylistId,
+          );
+          final nextVisibleIdx = (activeVisibleIdx + 1) % visiblePlaylists.length;
+          await setActivePlaylistById(
+            visiblePlaylists[nextVisibleIdx].id,
+            autoPlay: true,
+          );
+          return;
+        }
+      }
+    }
+
+    _isPlaying = false;
+    _resetLocalPositionAnchor();
+    _playerState = PlayerState.completed;
+    _emitPlaylistState();
+    notifyListeners();
   }
 
   void _disposePlaylistState() {
