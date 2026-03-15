@@ -1,4 +1,5 @@
 use crate::frb_generated::StreamSink;
+use cpal::traits::{DeviceTrait, HostTrait};
 use realfft::{num_complex::Complex, RealFftPlanner, RealToComplex};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::fs::File;
@@ -17,8 +18,10 @@ use symphonia::core::probe::Hint;
 const FFT_SIZE: usize = 1024;
 const RAW_FFT_BINS: usize = FFT_SIZE / 2;
 const PLAYBACK_STATE_PUSH_INTERVAL: Duration = Duration::from_millis(500);
+const DEFAULT_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 static PLAYER_CONTROLLER: OnceLock<Mutex<PlayerController>> = OnceLock::new();
+static DEFAULT_OUTPUT_MONITOR: OnceLock<()> = OnceLock::new();
 
 fn controller() -> &'static Mutex<PlayerController> {
     PLAYER_CONTROLLER.get_or_init(|| Mutex::new(PlayerController::new()))
@@ -36,6 +39,7 @@ pub struct PlaybackState {
 struct PlayerController {
     sink: Option<MixerDeviceSink>,
     player: Option<Player>,
+    active_output_device_name: Option<String>,
     latest_fft: Arc<Mutex<Vec<f32>>>,
     loaded_path: Option<String>,
     loaded_duration: Duration,
@@ -51,6 +55,7 @@ impl PlayerController {
         Self {
             sink: None,
             player: None,
+            active_output_device_name: None,
             latest_fft: Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS])),
             loaded_path: None,
             loaded_duration: Duration::ZERO,
@@ -67,13 +72,25 @@ impl PlayerController {
             return Ok(());
         }
 
-        let sink = DeviceSinkBuilder::open_default_sink()
-            .map_err(|e| format!("open default audio device failed: {e}"))?;
-        let player = Player::connect_new(&sink.mixer());
+        let (sink, player, device_name) = Self::open_current_default_output()?;
 
         self.sink = Some(sink);
         self.player = Some(player);
+        self.active_output_device_name = Some(device_name);
         Ok(())
+    }
+
+    fn open_current_default_output() -> Result<(MixerDeviceSink, Player, String), String> {
+        let device = cpal::default_host()
+            .default_output_device()
+            .ok_or_else(|| "no default audio output device available".to_string())?;
+        let device_name = describe_output_device(&device);
+        let sink = DeviceSinkBuilder::from_device(device)
+            .map_err(|e| format!("open default audio device failed: {e}"))?
+            .open_stream()
+            .map_err(|e| format!("open default audio device failed: {e}"))?;
+        let player = Player::connect_new(&sink.mixer());
+        Ok((sink, player, device_name))
     }
 
     fn with_player<F, T>(&self, f: F) -> Result<T, String>
@@ -187,6 +204,56 @@ impl PlayerController {
             path: self.loaded_path.clone(),
         }
     }
+
+    fn maybe_switch_to_new_default_output(&mut self) -> Result<(), String> {
+        if self.sink.is_none() || self.player.is_none() {
+            return Ok(());
+        }
+
+        let Some(current_default_device) = cpal::default_host().default_output_device() else {
+            return Ok(());
+        };
+        let current_default_name = describe_output_device(&current_default_device);
+
+        if self.active_output_device_name.as_deref() == Some(current_default_name.as_str()) {
+            return Ok(());
+        }
+
+        let playback_position = self.playback_position();
+        let loaded_path = self.loaded_path.clone();
+        let was_playing = self
+            .player
+            .as_ref()
+            .map(|player| !player.is_paused() && !player.empty())
+            .unwrap_or(false);
+
+        let (sink, player, device_name) = Self::open_current_default_output()?;
+        self.sink = Some(sink);
+        self.player = Some(player);
+        self.active_output_device_name = Some(device_name);
+
+        if let Some(path) = loaded_path {
+            self.append_from_path(&path, playback_position, was_playing)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn describe_output_device(device: &cpal::Device) -> String {
+    format!("{:?}", device.id())
+}
+
+fn start_default_output_monitor() {
+    DEFAULT_OUTPUT_MONITOR.get_or_init(|| {
+        thread::spawn(|| loop {
+            thread::sleep(DEFAULT_OUTPUT_POLL_INTERVAL);
+
+            if let Ok(mut c) = controller().lock() {
+                let _ = c.maybe_switch_to_new_default_output();
+            }
+        });
+    });
 }
 
 fn push_state() -> PlaybackState {
@@ -361,6 +428,7 @@ pub fn greet(name: String) -> String {
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     flutter_rust_bridge::setup_default_user_utils();
+    start_default_output_monitor();
 
     if let Ok(mut c) = controller().lock() {
         let _ = c.ensure_audio_output();
@@ -484,6 +552,9 @@ pub fn dispose_audio() -> Result<(), String> {
     c.loaded_path = None;
     c.loaded_duration = Duration::ZERO;
     c.source_start_offset = Duration::ZERO;
+    c.active_output_device_name = None;
+    c.sink = None;
+    c.player = None;
     c.cached_pcm = None;
     c.cached_channels = 0;
     c.cached_sample_rate = 0;
