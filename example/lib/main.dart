@@ -73,7 +73,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     _controller.initialize();
 
     // 创建平滑风格输出流 - 高平滑、低响应速度
-    final smoothOutput = _controller.createVisualizerOutput(
+    final smoothOutput = _controller.visualizer.createOutput(
       const VisualizerOutputConfig(
         id: 'smooth',
         label: 'Smooth',
@@ -91,7 +91,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     );
 
     // 创建响应风格输出流 - 低平滑、快响应速度
-    final responsiveOutput = _controller.createVisualizerOutput(
+    final responsiveOutput = _controller.visualizer.createOutput(
       const VisualizerOutputConfig(
         id: 'responsive',
         label: 'Responsive',
@@ -152,9 +152,9 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       return;
     }
 
-    await _controller.addTracks(tracks);
-    if (!_controller.isPlaying && _controller.selectedPath != null) {
-      await _controller.play();
+    await _controller.playlist.addTracks(tracks);
+    if (!_controller.player.isPlaying && _controller.player.currentPath != null) {
+      await _controller.player.play();
     }
   }
 
@@ -202,30 +202,30 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: _controller.selectedPath != null
-                            ? _controller.playPrevious
+                        onPressed: _controller.player.currentPath != null
+                            ? () => _controller.playlist.playPrevious()
                             : null,
                         child: const Icon(Icons.skip_previous),
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: _controller.selectedPath != null
-                            ? _controller.togglePlayPause
+                        onPressed: _controller.player.currentPath != null
+                            ? () => _controller.player.togglePlayPause()
                             : null,
                         child: Icon(
-                          _controller.isPlaying ? Icons.pause : Icons.play_arrow,
+                          _controller.player.isPlaying ? Icons.pause : Icons.play_arrow,
                         ),
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: _controller.selectedPath != null
-                            ? _controller.playNext
+                        onPressed: _controller.player.currentPath != null
+                            ? () => _controller.playlist.playNext()
                             : null,
                         child: const Icon(Icons.skip_next),
                       ),
                       const SizedBox(width: 12),
                       DropdownButton<PlaylistMode>(
-                        value: _controller.playlistMode,
+                        value: _controller.playlist.mode,
                         items: PlaylistMode.values.map((mode) {
                           return DropdownMenuItem(
                             value: mode,
@@ -234,7 +234,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                         }).toList(),
                         onChanged: (mode) {
                           if (mode != null) {
-                            _controller.setPlaylistMode(mode);
+                            _controller.playlist.setMode(mode);
                           }
                         },
                       ),
@@ -245,17 +245,17 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    _controller.selectedPath ?? 'No file selected',
+                    _controller.player.currentPath ?? 'No file selected',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (_controller.selectedPath != null)
+                if (_controller.player.currentPath != null)
                   ElevatedButton(
                     onPressed: () => _loadWaveform(),
                     child: const Text('Extract Full Waveform (Fast)'),
                   ),
-                if (_controller.selectedPath != null)
+                if (_controller.player.currentPath != null)
                   Row(
                     children: [
                       const Text('Waveform Stride'),
@@ -283,40 +283,40 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                       ),
                     ],
                   ),
-                if (_controller.playlist.isNotEmpty)
+                if (_controller.playlist.items.isNotEmpty)
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Playlist: ${(_controller.currentIndex ?? -1) + 1} / ${_controller.playlist.length}',
+                      'Playlist: ${(_controller.playlist.currentIndex ?? -1) + 1} / ${_controller.playlist.items.length}',
                     ),
                   ),
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    '${_format(_controller.position)} / ${_format(_controller.duration)}',
+                    '${_format(_controller.player.position)} / ${_format(_controller.player.duration)}',
                   ),
                 ),
                 Slider(
-                  value: _controller.duration.inMilliseconds > 0
-                      ? _controller.position.inMilliseconds.toDouble().clamp(
+                  value: _controller.player.duration.inMilliseconds > 0
+                      ? _controller.player.position.inMilliseconds.toDouble().clamp(
                           0,
-                          _controller.duration.inMilliseconds.toDouble(),
+                          _controller.player.duration.inMilliseconds.toDouble(),
                         )
                       : 0.0,
-                  max: _controller.duration.inMilliseconds.toDouble() > 0
-                      ? _controller.duration.inMilliseconds.toDouble()
+                  max: _controller.player.duration.inMilliseconds.toDouble() > 0
+                      ? _controller.player.duration.inMilliseconds.toDouble()
                       : 1.0,
                   onChanged: (value) {
-                    _controller.seek(Duration(milliseconds: value.toInt()));
+                    _controller.player.seek(Duration(milliseconds: value.toInt()));
                   },
                 ),
-                if (_controller.error != null) ...[
+                if (_controller.player.error != null) ...[
                   const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      _controller.error!,
+                      _controller.player.error!,
                       style: const TextStyle(color: Colors.red),
                     ),
                   ),
@@ -328,9 +328,9 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                   child: CustomPaint(
                     painter: WaveformPainter(
                       _waveform,
-                      _controller.duration.inMilliseconds > 0
-                          ? _controller.position.inMilliseconds /
-                                _controller.duration.inMilliseconds
+                      _controller.player.duration.inMilliseconds > 0
+                          ? _controller.player.position.inMilliseconds /
+                                _controller.player.duration.inMilliseconds
                           : 0.0,
                     ),
                   ),
@@ -575,10 +575,10 @@ class _AudioDropRegionState extends State<AudioDropRegion> {
     }
     if (tracks.isEmpty) return;
 
-    await widget.controller.addTracks(tracks);
-    if (!widget.controller.isPlaying &&
-        widget.controller.selectedPath != null) {
-      await widget.controller.play();
+    await widget.controller.playlist.addTracks(tracks);
+    if (!widget.controller.player.isPlaying &&
+        widget.controller.player.currentPath != null) {
+      await widget.controller.player.play();
     }
   }
 
@@ -603,7 +603,7 @@ class _AudioDropRegionState extends State<AudioDropRegion> {
         child: Stack(
           children: [
             widget.child,
-            if (_enabled && widget.controller.selectedPath == null)
+            if (_enabled && widget.controller.player.currentPath == null)
               Center(
                 child: Text(
                   widget.overlayText,
