@@ -192,52 +192,54 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                Row(
-                  children: [
-                    ElevatedButton(
-                      onPressed: _controller.isSupported ? _pickAudio : null,
-                      child: const Text('Select Audio'),
-                    ),
-                    const SizedBox(width: 12),
-
-                    ElevatedButton(
-                      onPressed: _controller.selectedPath != null
-                          ? _controller.playPrevious
-                          : null,
-                      child: const Icon(Icons.skip_previous),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: _controller.selectedPath != null
-                          ? _controller.togglePlayPause
-                          : null,
-                      child: Icon(
-                        _controller.isPlaying ? Icons.pause : Icons.play_arrow,
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      ElevatedButton(
+                        onPressed: _controller.isSupported ? _pickAudio : null,
+                        child: const Text('Select Audio'),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: _controller.selectedPath != null
-                          ? _controller.playNext
-                          : null,
-                      child: const Icon(Icons.skip_next),
-                    ),
-                    const SizedBox(width: 12),
-                    DropdownButton<PlaylistMode>(
-                      value: _controller.playlistMode,
-                      items: PlaylistMode.values.map((mode) {
-                        return DropdownMenuItem(
-                          value: mode,
-                          child: Text(mode.name.toUpperCase()),
-                        );
-                      }).toList(),
-                      onChanged: (mode) {
-                        if (mode != null) {
-                          _controller.setPlaylistMode(mode);
-                        }
-                      },
-                    ),
-                  ],
+                      const SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: _controller.selectedPath != null
+                            ? _controller.playPrevious
+                            : null,
+                        child: const Icon(Icons.skip_previous),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: _controller.selectedPath != null
+                            ? _controller.togglePlayPause
+                            : null,
+                        child: Icon(
+                          _controller.isPlaying ? Icons.pause : Icons.play_arrow,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: _controller.selectedPath != null
+                            ? _controller.playNext
+                            : null,
+                        child: const Icon(Icons.skip_next),
+                      ),
+                      const SizedBox(width: 12),
+                      DropdownButton<PlaylistMode>(
+                        value: _controller.playlistMode,
+                        items: PlaylistMode.values.map((mode) {
+                          return DropdownMenuItem(
+                            value: mode,
+                            child: Text(mode.name.toUpperCase()),
+                          );
+                        }).toList(),
+                        onChanged: (mode) {
+                          if (mode != null) {
+                            _controller.setPlaylistMode(mode);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Align(
