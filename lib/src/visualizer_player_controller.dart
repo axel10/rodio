@@ -73,6 +73,12 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   bool get isInitialized => _initialized;
   EqualizerConfig get equalizerConfig => equalizer.config;
 
+  /// Returns the next track in the current playlist sequence.
+  AudioTrack? get nextTrack => playlist.nextTrack;
+
+  /// Returns the previous track in the current playlist sequence.
+  AudioTrack? get previousTrack => playlist.previousTrack;
+
   /// Returns a full snapshot of the current state.
   PlayerStateSnapshot get state => PlayerStateSnapshot(
     position: player.position,
@@ -85,6 +91,8 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
     activePlaylist: playlist.activePlaylist,
     currentIndex: playlist.currentIndex,
     track: playlist.currentTrack,
+    nextTrack: playlist.nextTrack,
+    previousTrack: playlist.previousTrack,
     error: player.error,
     equalizerConfig: equalizer.config,
     isTransitioning: _isTransitioning || player.isFadeActive,

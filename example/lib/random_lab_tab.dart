@@ -31,6 +31,7 @@ class RandomLabTabState extends State<RandomLabTab> {
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_onControllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         unawaited(_ensureDemoPlaylist());
@@ -218,6 +219,19 @@ class RandomLabTabState extends State<RandomLabTab> {
     return null;
   }
 
+  final ScrollController _horizontalController = ScrollController();
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    _horizontalController.dispose();
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     return AudioDropRegion(
@@ -231,33 +245,52 @@ class RandomLabTabState extends State<RandomLabTab> {
           tracks,
         );
       },
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildRandomHeader(),
-            const SizedBox(height: 12),
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    SizedBox(width: 320, child: _buildLibraryPanel()),
-                    const SizedBox(width: 12),
-                    SizedBox(width: 320, child: _buildQueuePanel()),
-                    const SizedBox(width: 12),
-                    SizedBox(width: 320, child: _buildSelectedPlaylistPanel()),
-                    const SizedBox(width: 12),
-                    SizedBox(width: 320, child: _buildShuffleDeckPanel()),
-                    const SizedBox(width: 12),
-                    SizedBox(width: 320, child: _buildRandomHistoryPanel()),
-                  ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Scrollbar(
+            controller: _horizontalController,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _horizontalController,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.all(16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: constraints.maxWidth - 32, // Adjust for padding
+                  minHeight: constraints.maxHeight - 32,
+                ),
+                child: IntrinsicWidth(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildRandomHeader(),
+                      const SizedBox(height: 12),
+                      _buildPlaybackStatus(),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(width: 320, child: _buildLibraryPanel()),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 320, child: _buildQueuePanel()),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 320, child: _buildSelectedPlaylistPanel()),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 320, child: _buildShuffleDeckPanel()),
+                            const SizedBox(width: 12),
+                            SizedBox(width: 320, child: _buildRandomHistoryPanel()),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -284,8 +317,6 @@ class RandomLabTabState extends State<RandomLabTab> {
   Widget _buildShuffleDeckPanel() {
     final deck = widget.controller.playlist.currentDeck;
     final cursor = widget.controller.playlist.deckCursor;
-    final currentTrackId = widget.controller.playlist.currentTrack?.id;
-
     return _buildTrackPanel(
       title: 'Shuffle Deck',
       subtitle: 'The internal sequence for random playback (Cursor: $cursor)',
@@ -299,11 +330,10 @@ class RandomLabTabState extends State<RandomLabTab> {
                   final id = deck[index];
                   final track = _resolveTrack(id) ?? AudioTrack(id: id, uri: '');
                   final isCurrentCursor = cursor == index;
-                  final isCurrentlyPlaying = id == currentTrackId;
 
                   return _TrackSummaryTile(
                     track: track,
-                    highlight: isCurrentlyPlaying,
+                    highlight: isCurrentCursor,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -322,8 +352,6 @@ class RandomLabTabState extends State<RandomLabTab> {
   Widget _buildRandomHistoryPanel() {
     final history = widget.controller.playlist.randomHistory;
     final cursor = widget.controller.playlist.historyCursor;
-    final currentTrackId = widget.controller.playlist.currentTrack?.id;
-
     return _buildTrackPanel(
       title: 'Random History',
       subtitle: 'Tracks recently played in random mode (Cursor: $cursor)',
@@ -339,11 +367,10 @@ class RandomLabTabState extends State<RandomLabTab> {
                       _resolveTrack(entry.trackId) ??
                       AudioTrack(id: entry.trackId, uri: '');
                   final isCurrentCursor = cursor == index;
-                  final isCurrentlyPlaying = entry.trackId == currentTrackId;
 
                   return _TrackSummaryTile(
                     track: track,
-                    highlight: isCurrentlyPlaying,
+                    highlight: isCurrentCursor,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -364,10 +391,9 @@ class RandomLabTabState extends State<RandomLabTab> {
 
   Widget _buildRandomHeader() {
     final shuffleStrategy = widget.controller.playlist.randomPolicy?.strategy;
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         DropdownButton<RandomPreset>(
           value: _randomPreset,
@@ -462,10 +488,12 @@ class RandomLabTabState extends State<RandomLabTab> {
           icon: const Icon(Icons.skip_next),
           label: const Text('Next'),
         ),
+        const SizedBox(width: 12),
         Text(
           'Shuffle: ${shuffleStrategy?.key ?? 'off'}',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
+        const SizedBox(width: 12),
         Text(
           'History: ${widget.controller.playlist.randomHistory.length}',
           style: Theme.of(context).textTheme.bodyMedium,
@@ -670,6 +698,80 @@ class RandomLabTabState extends State<RandomLabTab> {
         text,
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.bodyMedium,
+      ),
+    );
+  }
+
+  Widget _buildPlaybackStatus() {
+    final next = widget.controller.nextTrack;
+    final prev = widget.controller.previousTrack;
+    final current = widget.controller.playlist.currentTrack;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildStatusChip('Previous', prev, Icons.skip_previous),
+          const SizedBox(width: 8),
+          const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey),
+          const SizedBox(width: 8),
+          _buildStatusChip('Now Playing', current, Icons.play_arrow, highlight: true),
+          const SizedBox(width: 8),
+          const Icon(Icons.arrow_forward_ios, size: 12, color: Colors.grey),
+          const SizedBox(width: 8),
+          _buildStatusChip('Next Up', next, Icons.skip_next),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusChip(String label, AudioTrack? track, IconData icon, {bool highlight = false}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: highlight ? colorScheme.primaryContainer : colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: highlight ? colorScheme.primary : colorScheme.outlineVariant,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: highlight ? colorScheme.primary : colorScheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: highlight ? colorScheme.primary : colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(
+                width: 120,
+                child: Text(
+                  track?.title ?? (track != null ? 'Untitled' : 'None'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontWeight: highlight ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

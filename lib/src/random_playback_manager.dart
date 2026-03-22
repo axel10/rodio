@@ -56,9 +56,16 @@ class RandomPlaybackManager {
   int? currentHistoryIndex({
     required String? playlistId,
     required AudioTrack? currentTrack,
+    int? currentIndex,
   }) {
     if (currentTrack == null || _historyCursor == null) return null;
-    return _historyCursor;
+    
+    // Validate if the current cursor still points to the correct track
+    final entry = _history[_historyCursor!];
+    if (entry.trackId == currentTrack.id && (currentIndex == null || entry.trackIndex == currentIndex)) {
+      return _historyCursor;
+    }
+    return null;
   }
 
   // --- Public API ---
@@ -91,6 +98,7 @@ class RandomPlaybackManager {
     required String? playlistId,
     required List<AudioTrack> tracks,
     required AudioTrack? currentTrack,
+    int? currentIndex,
   }) {
     final policy = _policy;
     if (policy == null || currentTrack == null) {
@@ -101,25 +109,42 @@ class RandomPlaybackManager {
     _trimHistory(policy.history.maxEntries);
 
     // Sync history cursor
-    final lastCursor = _findLastHistoryCursorForTrackId(currentTrack.id);
-    if (lastCursor != null) {
-      _historyCursor = lastCursor;
-    } else {
-      // If not in history, append it (forcefully, since it's the current track)
-      _appendHistory(
-        track: currentTrack,
-        playlistId: playlistId,
-        index: tracks.indexWhere((t) => t.id == currentTrack.id),
-        policyKey: policy.key,
-        limit: policy.history.maxEntries,
-      );
-      _historyCursor = _history.length - 1;
+    // If the current cursor already matches, keep it.
+    bool cursorSynced = false;
+    if (_historyCursor != null && _historyCursor! < _history.length) {
+      final entry = _history[_historyCursor!];
+      if (entry.trackId == currentTrack.id && (currentIndex == null || entry.trackIndex == currentIndex)) {
+        cursorSynced = true;
+      }
+    }
+
+    if (!cursorSynced) {
+      final match = _findHistoryCursorForTrack(currentTrack.id, currentIndex);
+      if (match != null) {
+        _historyCursor = match;
+      } else {
+        // If not in history, append it (forcefully, since it's the current track)
+        final actualIndex = currentIndex ?? tracks.indexWhere((t) => t.id == currentTrack.id);
+        _appendHistory(
+          track: currentTrack,
+          playlistId: playlistId,
+          index: actualIndex,
+          policyKey: policy.key,
+          limit: policy.history.maxEntries,
+        );
+        _historyCursor = _history.length - 1;
+      }
     }
 
     // Sync deck if needed
     if (policy.strategy.kind == RandomStrategyKind.fisherYates ||
         policy.strategy.kind == RandomStrategyKind.sequential) {
-      final context = _buildContext_internal(playlistId, tracks, currentTrack: currentTrack);
+      final context = _buildContext_internal(
+        playlistId, 
+        tracks, 
+        currentTrack: currentTrack,
+        currentIndex: currentIndex,
+      );
       final candidates = policy.scope.resolve(context);
       _syncDeck(context, candidates);
     }
@@ -265,21 +290,22 @@ class RandomPlaybackManager {
     String? playlistId,
     List<AudioTrack> tracks, {
     AudioTrack? currentTrack,
+    int? currentIndex,
   }) {
-    int? currentIndex;
-    if (currentTrack != null) {
-      currentIndex = tracks.indexWhere((t) => t.id == currentTrack.id);
-      if (currentIndex < 0) currentIndex = null;
-    } else if (_deckCursor != null && _deckCursor! < _deck.length) {
+    int? finalIndex = currentIndex;
+    if (finalIndex == null && currentTrack != null) {
+      finalIndex = tracks.indexWhere((t) => t.id == currentTrack.id);
+      if (finalIndex < 0) finalIndex = null;
+    } else if (finalIndex == null && _deckCursor != null && _deckCursor! < _deck.length) {
       final id = _deck[_deckCursor!];
-      currentIndex = tracks.indexWhere((t) => t.id == id);
-      if (currentIndex < 0) currentIndex = null;
+      finalIndex = tracks.indexWhere((t) => t.id == id);
+      if (finalIndex < 0) finalIndex = null;
     }
 
     return RandomSelectionContext(
       playlistId: playlistId,
       tracks: tracks,
-      currentIndex: currentIndex,
+      currentIndex: finalIndex,
       history: _history,
       policyKey: _policy?.key ?? '',
     );
@@ -348,6 +374,15 @@ class RandomPlaybackManager {
   int? _findCurrentDeckCursor(List<AudioTrack> tracks, int? currentIndex) {
     if (currentIndex == null || _deck.isEmpty) return null;
     final currentId = tracks[currentIndex].id;
+    
+    // First pass: look for exact index match (if possible, though deck currently only stores IDs)
+    // Actually, deck is built from candidates. If there are duplicate IDs, they will appear multiple times in _deck.
+    // We need to match the *occurrence* of the track at currentIndex.
+    
+    // Since we don't store indices in _deck, we have to guess which 'A' it is.
+    // However, if we are in fisherYates mode, we usually know where we are because we controlled the navigation.
+    
+    // For now, let's at least maintain the logic that if multiple exist, we prefer the one closest to current _deckCursor if it exists.
     for (var i = 0; i < _deck.length; i++) {
         if (_deck[i] == currentId) return i;
     }
@@ -392,7 +427,17 @@ class RandomPlaybackManager {
     _trimHistory(limit);
   }
 
-  int? _findLastHistoryCursorForTrackId(String id) {
+  int? _findHistoryCursorForTrack(String id, int? index) {
+    // 1. Try to find an exact match (ID + Index) from newest to oldest
+    if (index != null) {
+      for (var i = _history.length - 1; i >= 0; i--) {
+        if (_history[i].trackId == id && _history[i].trackIndex == index) {
+          return i;
+        }
+      }
+    }
+    
+    // 2. Fallback: find the last occurrence by ID only
     for (var i = _history.length - 1; i >= 0; i--) {
       if (_history[i].trackId == id) return i;
     }

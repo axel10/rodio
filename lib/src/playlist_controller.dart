@@ -59,10 +59,26 @@ class PlaylistController extends ChangeNotifier {
   int? get deckCursor => _randomManager.deckCursor;
   
   /// Whether there is a next track available.
-  bool get hasNext => _resolveAdjacentIndex(next: true, peek: true) != null;
+  bool get hasNext => nextTrack != null;
 
   /// Whether there is a previous track available.
-  bool get hasPrev => _resolveAdjacentIndex(next: false, peek: true) != null;
+  bool get hasPrev => previousTrack != null;
+
+  /// Returns the next track in the current playlist sequence.
+  AudioTrack? get nextTrack {
+    final index = _resolveAdjacentIndex(next: true, peek: true);
+    return (index != null && index >= 0 && index < _activePlaylistTracks.length)
+        ? _activePlaylistTracks[index]
+        : null;
+  }
+
+  /// Returns the previous track in the current playlist sequence.
+  AudioTrack? get previousTrack {
+    final index = _resolveAdjacentIndex(next: false, peek: true);
+    return (index != null && index >= 0 && index < _activePlaylistTracks.length)
+        ? _activePlaylistTracks[index]
+        : null;
+  }
 
   /// Returns a playlist by id, or `null` if it does not exist.
   Playlist? playlistById(String? id) {
@@ -313,7 +329,7 @@ class PlaylistController extends ChangeNotifier {
     await _reconcile(oldTrack: oldTrack);
   }
 
-  @internal
+  /// Ensures that the default queue playlist exists and is active.
   Future<void> ensureQueuePlaylist() async => _ensureDefaultPlaylist();
 
   void setMode(PlaylistMode mode) {
@@ -443,6 +459,7 @@ class PlaylistController extends ChangeNotifier {
       playlistId: _activePlaylistId,
       tracks: _activePlaylistTracks,
       currentTrack: currentTrack,
+      currentIndex: _currentIndex,
     );
   }
 

@@ -18,6 +18,8 @@ class PlayerStateSnapshot {
     this.activePlaylist,
     this.currentIndex,
     this.track,
+    this.nextTrack,
+    this.previousTrack,
     this.error,
     required this.equalizerConfig,
     this.isTransitioning = false,
@@ -33,6 +35,8 @@ class PlayerStateSnapshot {
   final Playlist? activePlaylist;
   final int? currentIndex;
   final AudioTrack? track;
+  final AudioTrack? nextTrack;
+  final AudioTrack? previousTrack;
   final String? error;
   final EqualizerConfig equalizerConfig;
   final bool isTransitioning;
@@ -48,6 +52,8 @@ class PlayerStateSnapshot {
     Playlist? activePlaylist,
     int? currentIndex,
     AudioTrack? track,
+    AudioTrack? nextTrack,
+    AudioTrack? previousTrack,
     String? error,
     EqualizerConfig? equalizerConfig,
     bool? isTransitioning,
@@ -63,6 +69,8 @@ class PlayerStateSnapshot {
       activePlaylist: activePlaylist ?? this.activePlaylist,
       currentIndex: currentIndex ?? this.currentIndex,
       track: track ?? this.track,
+      nextTrack: nextTrack ?? this.nextTrack,
+      previousTrack: previousTrack ?? this.previousTrack,
       error: error ?? this.error,
       equalizerConfig: equalizerConfig ?? this.equalizerConfig,
       isTransitioning: isTransitioning ?? this.isTransitioning,
@@ -84,6 +92,8 @@ class PlayerStateSnapshot {
           activePlaylist == other.activePlaylist &&
           currentIndex == other.currentIndex &&
           track == other.track &&
+          nextTrack == other.nextTrack &&
+          previousTrack == other.previousTrack &&
           error == other.error &&
           equalizerConfig == other.equalizerConfig &&
           isTransitioning == other.isTransitioning;
@@ -100,6 +110,8 @@ class PlayerStateSnapshot {
       activePlaylist.hashCode ^
       currentIndex.hashCode ^
       track.hashCode ^
+      nextTrack.hashCode ^
+      previousTrack.hashCode ^
       error.hashCode ^
       equalizerConfig.hashCode ^
       isTransitioning.hashCode;
