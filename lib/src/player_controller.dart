@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 
 import 'player_models.dart';
 import 'rust/api/simple_api.dart';
@@ -41,10 +42,12 @@ class PlayerController extends ChangeNotifier {
   bool get isFadeActive => _trackFadeTransitionActive;
   int get fadeSequence => _fadeSequence;
 
+  @internal
   void nextFadeSequence() => _fadeSequence++;
 
-  // --- Public Actions ---
+  // --- Actions ---
 
+  @internal
   Future<void> performTransition({
     required String uri,
     required bool autoPlay,
@@ -175,6 +178,7 @@ class PlayerController extends ChangeNotifier {
     _notify();
   }
 
+  @internal
   Future<void> applyNativeVolume(double volume) async {
     final clamped = volume.clamp(0.0, 1.0);
     await setAudioVolume(volume: clamped);
@@ -209,12 +213,13 @@ class PlayerController extends ChangeNotifier {
     return _fadeSequence == sequence;
   }
 
+  @internal
   void setFadeActive(bool active) {
     _trackFadeTransitionActive = active;
     _notify();
   }
 
-  void stopPlayback() {
+  Future<void> stopPlayback() async {
     _selectedPath = null;
     _position = Duration.zero;
     _duration = Duration.zero;
@@ -225,6 +230,7 @@ class PlayerController extends ChangeNotifier {
 
   // --- External Sync Interface ---
 
+  @internal
   void applySnapshot(String? path, Duration position, Duration duration, bool isPlaying, double nativeVolume) {
     if (DateTime.now().difference(_lastCommandTime) < const Duration(milliseconds: 500)) return;
 
@@ -247,12 +253,14 @@ class PlayerController extends ChangeNotifier {
     _notify();
   }
 
+  @internal
   void setError(String? message) {
     _error = message;
     if (message != null) _playerState = PlayerState.error;
     _notify();
   }
 
+  @internal
   void updatePosition(Duration position) {
     _position = position;
     if (_duration > Duration.zero && _position >= _duration - const Duration(milliseconds: 250)) {

@@ -1,7 +1,9 @@
+import 'package:meta/meta.dart';
 import 'playlist_models.dart';
 import 'random_playback_models.dart';
 
 /// Internal interface for sub-controllers to communicate with the main controller.
+@internal
 abstract class AudioVisualizerParent {
   void notifyListeners();
 

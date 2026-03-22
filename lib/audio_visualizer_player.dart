@@ -7,7 +7,7 @@ export 'src/visualizer_player_controller.dart';
 export 'src/fft_frame.dart';
 export 'src/fft_processor.dart';
 export 'src/rust/api/simple/equalizer.dart';
-export 'src/player_models.dart';
+export 'src/player_models.dart' hide AudioVisualizerParent;
 export 'src/playlist_models.dart';
 export 'src/random_playback_models.dart';
 export 'src/visualizer_output_config.dart';

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 
 import 'fft_frame.dart';
 import 'fft_processor.dart';
@@ -75,6 +76,7 @@ class VisualizerController extends ChangeNotifier {
     _notify();
   }
 
+  @internal
   void processAnalysisTick(bool isPlaying, Duration position) {
     if (!_fftEnabled) return;
 
@@ -95,6 +97,7 @@ class VisualizerController extends ChangeNotifier {
     _emitFrames(position, isPlaying);
   }
 
+  @internal
   void processRenderTick(int elapsedMicros, int analysisIntervalMicros) {
     if (!_fftEnabled || !hasOptimizedListeners) return;
     _fftProcessor.processRender(elapsedMicros, analysisIntervalMicros);

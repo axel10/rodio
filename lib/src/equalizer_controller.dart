@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 import 'player_models.dart';
 import 'rust/api/simple_api.dart';
 
@@ -21,6 +22,7 @@ class EqualizerController extends ChangeNotifier {
   EqualizerConfig _config = _makeDefaultConfig();
   EqualizerConfig get config => _config;
 
+  @internal
   Future<void> initialize() async {
     try {
       _config = await getAudioEqualizerConfig();

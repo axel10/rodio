@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:meta/meta.dart';
 
 import 'player_models.dart';
 import 'playlist_models.dart';
@@ -147,6 +148,7 @@ class PlaylistController extends ChangeNotifier {
     }
   }
 
+  @internal
   Future<void> updatePlaylistTracks(String id, List<AudioTrack> newTracks) async {
     final idx = _playlists.indexWhere((p) => p.id == id);
     if (idx >= 0) {
@@ -312,6 +314,7 @@ class PlaylistController extends ChangeNotifier {
     _notify();
   }
 
+  @internal
   Future<void> ensureQueuePlaylist() async => _ensureDefaultPlaylist();
 
   void setMode(PlaylistMode mode) {
@@ -356,6 +359,7 @@ class PlaylistController extends ChangeNotifier {
     _notify();
   }
 
+  @internal
   int? resolveAdjacentIndex({required bool next}) => _resolveAdjacentIndex(next: next, peek: true);
 
   // --- Internal ---
