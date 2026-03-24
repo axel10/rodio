@@ -69,7 +69,8 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   Timer? _renderTick;
   StreamSubscription<PlaybackState>? _playbackStateSubscription;
 
-  bool get isSupported => Platform.isAndroid || Platform.isWindows;
+  bool get isSupported =>
+      Platform.isAndroid || Platform.isLinux || Platform.isWindows;
   bool get isInitialized => _initialized;
   EqualizerConfig get equalizerConfig => equalizer.config;
 
@@ -101,7 +102,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   Future<void> initialize() async {
     if (_initialized) return;
     if (!isSupported) {
-      player.setError('Only Android/Windows are supported.');
+      player.setError('Only Android, Linux, and Windows are supported.');
       return;
     }
 

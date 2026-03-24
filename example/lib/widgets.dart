@@ -25,7 +25,7 @@ class AudioDropRegion extends StatefulWidget {
 class _AudioDropRegionState extends State<AudioDropRegion> {
   bool _isDragging = false;
 
-  bool get _enabled => Platform.isWindows;
+  bool get _enabled => Platform.isWindows || Platform.isLinux;
 
   Future<void> _handleDrop(List<XFile> files) async {
     if (!_enabled || files.isEmpty) {
