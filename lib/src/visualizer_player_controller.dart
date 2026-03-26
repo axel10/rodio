@@ -119,6 +119,14 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
       }
     }
 
+    // Initialize the Rust audio engine (starts device monitoring thread)
+    try {
+      await initApp();
+    } catch (e) {
+      player.setError('Audio engine init failed: $e');
+      return;
+    }
+
     try {
       await equalizer.initialize();
     } catch (e) {
