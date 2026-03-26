@@ -12,6 +12,7 @@ import 'rust/api/simple_api.dart';
 import 'rust/frb_generated.dart';
 import 'fft_processor.dart';
 import 'player_state_snapshot.dart';
+import 'package:audio_session/audio_session.dart';
 import 'equalizer_controller.dart';
 
 export 'player_controller.dart';
@@ -68,6 +69,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   Timer? _analysisTick;
   Timer? _renderTick;
   StreamSubscription<PlaybackState>? _playbackStateSubscription;
+  StreamSubscription? _audioSessionSubscription;
 
   bool get isSupported =>
       Platform.isAndroid || Platform.isLinux || Platform.isWindows;
@@ -142,6 +144,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
     _analysisTick = Timer.periodic(_analysisInterval, (_) => unawaited(_onAnalysisTick()));
     _renderTick = Timer.periodic(_renderInterval, (_) => _onRenderTick());
 
+    if (Platform.isAndroid) {
+      unawaited(_setupAudioSession());
+    }
+
     visualizer.visualizerOutputManager.startAll();
     _initialized = true;
     notifyListeners();
@@ -152,6 +158,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
     _analysisTick?.cancel();
     _renderTick?.cancel();
     _playbackStateSubscription?.cancel();
+    _audioSessionSubscription?.cancel();
     unawaited(disposeAudio());
     visualizer.dispose();
     player.dispose();
@@ -260,6 +267,21 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
     } catch (e) {
       player.setError('FFT fetch failed: $e');
       _latestFftCache = const [];
+    }
+  }
+
+  Future<void> _setupAudioSession() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+
+      _audioSessionSubscription = session.devicesStream.listen((event) {
+        debugPrint('[AudioSession] Devices changed: $event');
+        // Notify Rust to reconstruct the audio stream on the new default device.
+        unawaited(handleDeviceChanged());
+      });
+    } catch (e) {
+      debugPrint('[AudioSession] Setup failed: $e');
     }
   }
 

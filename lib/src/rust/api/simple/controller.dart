@@ -11,6 +11,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `PlaybackDeck`, `PlayerController`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
+Future<void> initLogger() =>
+    RustLib.instance.api.crateApiSimpleControllerInitLogger();
+
 Future<void> initApp() =>
     RustLib.instance.api.crateApiSimpleControllerInitApp();
 
@@ -67,6 +70,9 @@ Future<Float32List> getLatestFft() =>
 
 Future<String?> getLoadedAudioPath() =>
     RustLib.instance.api.crateApiSimpleControllerGetLoadedAudioPath();
+
+Future<void> handleDeviceChanged() =>
+    RustLib.instance.api.crateApiSimpleControllerHandleDeviceChanged();
 
 class PlaybackState {
   final PlatformInt64 positionMs;

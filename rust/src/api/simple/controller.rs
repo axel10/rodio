@@ -369,7 +369,7 @@ impl PlayerController {
         Ok(())
     }
 
-    fn maybe_switch_to_new_default_output(&mut self) -> Result<(), String> {
+    fn maybe_switch_to_new_default_output(&mut self, force: bool) -> Result<(), String> {
         if self.sink.is_none() {
             info!("[AudioDeviceMonitor] maybe_switch: sink is None, skipping");
             return Ok(());
@@ -384,7 +384,7 @@ impl PlayerController {
         info!("[AudioDeviceMonitor] maybe_switch: active='{}' vs current='{}'", self.active_output_device_name.as_deref().unwrap_or("(none)"), current_default_name);
         info!("[AudioDeviceMonitor] maybe_switch: comparison result = {}", self.active_output_device_name.as_deref() == Some(current_default_name.as_str()));
 
-        if self.active_output_device_name.as_deref() == Some(current_default_name.as_str()) {
+        if !force && self.active_output_device_name.as_deref() == Some(current_default_name.as_str()) {
             return Ok(());
         }
 
@@ -441,7 +441,7 @@ fn start_default_output_monitor() {
             thread::sleep(DEFAULT_OUTPUT_POLL_INTERVAL);
 
             if let Ok(mut c) = controller().lock() {
-                let result = c.maybe_switch_to_new_default_output();
+                let result = c.maybe_switch_to_new_default_output(false);
                 #[cfg(debug_assertions)]
                 {
                     if let Err(e) = result {
@@ -665,4 +665,12 @@ pub fn get_loaded_audio_path() -> Option<String> {
         return c.public_path().map(str::to_string);
     }
     None
+}
+
+pub fn handle_device_changed() -> Result<(), String> {
+    info!("[AudioDeviceMonitor] handle_device_changed: manual trigger from Flutter");
+    if let Ok(mut c) = controller().lock() {
+        return c.maybe_switch_to_new_default_output(true);
+    }
+    Ok(())
 }
