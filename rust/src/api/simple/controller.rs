@@ -1,7 +1,7 @@
 use super::equalizer::{EqSource, EqualizerConfig, EqualizerShared};
 use super::fft::{clear_fft_buffer, FftSource, RAW_FFT_BINS};
 use android_logger::Config;
-use cpal::traits::{DeviceTrait, HostTrait};
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use log::{info, LevelFilter};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::fs::File;
@@ -113,7 +113,7 @@ impl PlayerController {
     }
 
     fn open_current_default_output() -> Result<(MixerDeviceSink, String), String> {
-        let device = cpal::default_host()
+        let device = rodio::cpal::default_host()
             .default_output_device()
             .ok_or_else(|| "no default audio output device available".to_string())?;
         let device_name = describe_output_device(&device);
@@ -369,48 +369,76 @@ impl PlayerController {
         Ok(())
     }
 
-    fn maybe_switch_to_new_default_output(&mut self, force: bool) -> Result<(), String> {
-        if self.sink.is_none() {
-            info!("[AudioDeviceMonitor] maybe_switch: sink is None, skipping");
-            return Ok(());
-        }
+    fn spawn_safe_audio_reconstruction(&mut self, force: bool) {
+        let current_sink_exists = self.sink.is_some();
+        let active_name = self.active_output_device_name.clone();
 
-        let Some(current_default_device) = cpal::default_host().default_output_device() else {
-            info!("[AudioDeviceMonitor] maybe_switch: no default output device found");
-            return Ok(());
-        };
-        let current_default_name = describe_output_device(&current_default_device);
+        thread::spawn(move || {
+            // 1. Initial check (cheap check before heavy taking)
+            if !force {
+                if !current_sink_exists {
+                    return;
+                }
+                if let Some(current_default_device) = rodio::cpal::default_host().default_output_device() {
+                    let current_default_name = describe_output_device(&current_default_device);
+                    if active_name.as_deref() == Some(current_default_name.as_str()) {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
 
-        info!("[AudioDeviceMonitor] maybe_switch: active='{}' vs current='{}'", self.active_output_device_name.as_deref().unwrap_or("(none)"), current_default_name);
-        info!("[AudioDeviceMonitor] maybe_switch: comparison result = {}", self.active_output_device_name.as_deref() == Some(current_default_name.as_str()));
+            info!("[AudioDeviceMonitor] Starting safe audio reconstruction...");
 
-        if !force && self.active_output_device_name.as_deref() == Some(current_default_name.as_str()) {
-            return Ok(());
-        }
+            // 2. Take resources and release lock
+            let old_data = if let Ok(mut c) = controller().lock() {
+                let pos = c.public_position();
+                let path = c.public_path().map(str::to_string);
+                let was_playing = c.any_deck_playing();
 
-        info!("[AudioDeviceMonitor] maybe_switch: DEVICE CHANGED detected, switching...");
+                c.transition_generation = c.transition_generation.wrapping_add(1);
+                let incoming = c.incoming_deck.take();
+                let current = c.current_deck.take();
+                let sink = c.sink.take();
 
-        let playback_position = self.public_position();
-        let loaded_path = self.public_path().map(str::to_string);
-        let was_playing = self.any_deck_playing();
+                Some((pos, path, was_playing, incoming, current, sink))
+            } else {
+                None
+            };
 
-        self.transition_generation = self.transition_generation.wrapping_add(1);
-        if let Some(incoming) = self.incoming_deck.take() {
-            incoming.clear();
-        }
-        if let Some(current) = self.current_deck.take() {
-            current.clear();
-        }
+            let Some((pos, path, was_playing, incoming, current, sink)) = old_data else {
+                return;
+            };
 
-        let (sink, device_name) = Self::open_current_default_output()?;
-        self.sink = Some(sink);
-        self.active_output_device_name = Some(device_name);
+            // 3. Cleanup outside the lock
+            if let Some(d) = incoming {
+                d.clear();
+            }
+            if let Some(d) = current {
+                d.clear();
+            }
+            drop(sink); // This is where deadlocks usually happen on Android
 
-        if let Some(path) = loaded_path {
-            self.replace_current_from_path(&path, playback_position, was_playing)?;
-        }
+            // 4. Grace period for OS to settle
+            thread::sleep(Duration::from_millis(200));
 
-        Ok(())
+            // 5. Re-open output
+            let Ok((new_sink, device_name)) = PlayerController::open_current_default_output() else {
+                info!("[AudioDeviceMonitor] Failed to re-open audio output after switch");
+                return;
+            };
+
+            // 6. Restore state
+            if let Ok(mut c) = controller().lock() {
+                c.sink = Some(new_sink);
+                c.active_output_device_name = Some(device_name);
+                if let Some(p) = path {
+                    info!("[AudioDeviceMonitor] Restoring playback to {} at {:?}", p, pos);
+                    let _ = c.replace_current_from_path(&p, pos, was_playing);
+                }
+            }
+        });
     }
 
     fn dispose_audio(&mut self) {
@@ -431,7 +459,7 @@ impl PlayerController {
     }
 }
 
-fn describe_output_device(device: &cpal::Device) -> String {
+fn describe_output_device(device: &rodio::cpal::Device) -> String {
     format!("{:?}", device.id())
 }
 
@@ -441,13 +469,7 @@ fn start_default_output_monitor() {
             thread::sleep(DEFAULT_OUTPUT_POLL_INTERVAL);
 
             if let Ok(mut c) = controller().lock() {
-                let result = c.maybe_switch_to_new_default_output(false);
-                #[cfg(debug_assertions)]
-                {
-                    if let Err(e) = result {
-                        info!("[AudioDeviceMonitor] maybe_switch_to_new_default_output error: {e}");
-                    }
-                }
+                c.spawn_safe_audio_reconstruction(false);
             }
         });
     });
@@ -670,7 +692,7 @@ pub fn get_loaded_audio_path() -> Option<String> {
 pub fn handle_device_changed() -> Result<(), String> {
     info!("[AudioDeviceMonitor] handle_device_changed: manual trigger from Flutter");
     if let Ok(mut c) = controller().lock() {
-        return c.maybe_switch_to_new_default_output(true);
+        c.spawn_safe_audio_reconstruction(true);
     }
     Ok(())
 }

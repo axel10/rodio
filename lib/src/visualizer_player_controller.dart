@@ -24,13 +24,15 @@ export 'playlist_models.dart';
 export 'player_state_snapshot.dart';
 
 /// The top-level modular controller for audio playback and visualization.
-class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVisualizerParent {
+class AudioVisualizerPlayerController extends ChangeNotifier
+    implements AudioVisualizerParent {
   AudioVisualizerPlayerController({
     this.fftSize = 1024,
     this.analysisFrequencyHz = 30.0,
     Duration fadeDuration = Duration.zero,
     FadeMode fadeMode = FadeMode.sequential,
-    VisualizerOptimizationOptions visualOptions = const VisualizerOptimizationOptions(),
+    VisualizerOptimizationOptions visualOptions =
+        const VisualizerOptimizationOptions(),
   }) {
     player = PlayerController(parent: this);
     player.setFadeConfig(duration: fadeDuration, mode: fadeMode);
@@ -48,9 +50,12 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   }
 
   static const int maxEqualizerBands = EqualizerController.maxEqualizerBands;
-  static const double equalizerMinFrequencyHz = EqualizerController.minFrequencyHz;
-  static const double equalizerMaxFrequencyHz = EqualizerController.maxFrequencyHz;
-  static const double equalizerBassBoostFrequencyHz = EqualizerController.bassBoostFrequencyHz;
+  static const double equalizerMinFrequencyHz =
+      EqualizerController.minFrequencyHz;
+  static const double equalizerMaxFrequencyHz =
+      EqualizerController.maxFrequencyHz;
+  static const double equalizerBassBoostFrequencyHz =
+      EqualizerController.bassBoostFrequencyHz;
   static const double equalizerBassBoostQ = EqualizerController.bassBoostQ;
 
   final int fftSize;
@@ -70,6 +75,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   Timer? _renderTick;
   StreamSubscription<PlaybackState>? _playbackStateSubscription;
   StreamSubscription? _audioSessionSubscription;
+  Timer? _deviceEventThrottleTimer;
+  DateTime? _lastDeviceEventExecution;
+  bool _hasPendingDeviceEvent = false;
 
   bool get isSupported =>
       Platform.isAndroid || Platform.isLinux || Platform.isWindows;
@@ -113,7 +121,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
         await RustLib.init();
         _rustLibInitialized = true;
       } catch (e) {
-        if (!e.toString().contains('Should not initialize flutter_rust_bridge twice')) {
+        if (!e.toString().contains(
+          'Should not initialize flutter_rust_bridge twice',
+        )) {
           player.setError('Rust bridge init failed: $e');
           return;
         }
@@ -141,7 +151,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
       onError: (e) => player.setError('Playback subscription failed: $e'),
     );
 
-    _analysisTick = Timer.periodic(_analysisInterval, (_) => unawaited(_onAnalysisTick()));
+    _analysisTick = Timer.periodic(
+      _analysisInterval,
+      (_) => unawaited(_onAnalysisTick()),
+    );
     _renderTick = Timer.periodic(_renderInterval, (_) => _onRenderTick());
 
     if (Platform.isAndroid) {
@@ -159,6 +172,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
     _renderTick?.cancel();
     _playbackStateSubscription?.cancel();
     _audioSessionSubscription?.cancel();
+    _deviceEventThrottleTimer?.cancel();
     unawaited(disposeAudio());
     visualizer.dispose();
     player.dispose();
@@ -203,7 +217,11 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
         playlist.mode == PlaylistMode.autoQueueLoop) {
       final hasNext = playlist.resolveAdjacentIndex(next: true);
       if (hasNext == null) {
-        await playlist.setActivePlaylist(playlist.activePlaylistId!, startIndex: 0, autoPlay: true);
+        await playlist.setActivePlaylist(
+          playlist.activePlaylistId!,
+          startIndex: 0,
+          autoPlay: true,
+        );
         return true;
       }
     }
@@ -212,8 +230,11 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
 
   // --- Internal Loops ---
 
-  Duration get _analysisInterval => Duration(microseconds: (1000000.0 / analysisFrequencyHz).round());
-  Duration get _renderInterval => Duration(microseconds: (1000000.0 / visualizer.options.targetFrameRate).round());
+  Duration get _analysisInterval =>
+      Duration(microseconds: (1000000.0 / analysisFrequencyHz).round());
+  Duration get _renderInterval => Duration(
+    microseconds: (1000000.0 / visualizer.options.targetFrameRate).round(),
+  );
 
   Future<void> _onAnalysisTick() async {
     await _refreshLatestFftCache();
@@ -222,7 +243,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
 
   void _onRenderTick() {
     _advanceLocalPosition();
-    visualizer.processRenderTick(_renderInterval.inMicroseconds, _analysisInterval.inMicroseconds);
+    visualizer.processRenderTick(
+      _renderInterval.inMicroseconds,
+      _analysisInterval.inMicroseconds,
+    );
   }
 
   void _advanceLocalPosition() {
@@ -246,7 +270,8 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
   }
 
   Future<void> _handleAutoTransition() async {
-    if (_isTransitioning || player.currentState != PlayerState.completed) return;
+    if (_isTransitioning || player.currentState != PlayerState.completed)
+      return;
 
     if (playlist.mode == PlaylistMode.singleLoop) {
       await loadTrack(autoPlay: true);
@@ -263,7 +288,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
 
   Future<void> _refreshLatestFftCache() async {
     try {
-      _latestFftCache = (await getLatestFft()).map((value) => value.toDouble()).toList(growable: false);
+      _latestFftCache = (await getLatestFft())
+          .map((value) => value.toDouble())
+          .toList(growable: false);
     } catch (e) {
       player.setError('FFT fetch failed: $e');
       _latestFftCache = const [];
@@ -276,16 +303,39 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
       await session.configure(const AudioSessionConfiguration.music());
 
       _audioSessionSubscription = session.devicesStream.listen((event) {
-        debugPrint('[AudioSession] Devices changed: $event');
-        // Notify Rust to reconstruct the audio stream on the new default device.
-        unawaited(handleDeviceChanged());
+        final now = DateTime.now();
+        const throttleDuration = Duration(milliseconds: 3000);
+
+        if (_lastDeviceEventExecution == null ||
+            now.difference(_lastDeviceEventExecution!) >= throttleDuration) {
+          // Trigger first event immediately
+          _lastDeviceEventExecution = now;
+          unawaited(handleDeviceChanged());
+        } else {
+          // If within 1.2s window, only schedule the last one to run at the end of the window
+          _hasPendingDeviceEvent = true;
+          _deviceEventThrottleTimer?.cancel();
+          final remaining =
+              throttleDuration - now.difference(_lastDeviceEventExecution!);
+          _deviceEventThrottleTimer = Timer(remaining, () {
+            if (_hasPendingDeviceEvent) {
+              _lastDeviceEventExecution = DateTime.now();
+              unawaited(handleDeviceChanged());
+              _hasPendingDeviceEvent = false;
+            }
+          });
+        }
       });
     } catch (e) {
       debugPrint('[AudioSession] Setup failed: $e');
     }
   }
 
-  Future<List<double>> getWaveform({required int expectedChunks, int sampleStride = 1, String? filePath}) async {
+  Future<List<double>> getWaveform({
+    required int expectedChunks,
+    int sampleStride = 1,
+    String? filePath,
+  }) async {
     final targetPath = filePath ?? player.currentPath;
     if (targetPath == null) return const [];
     try {
@@ -309,12 +359,19 @@ class AudioVisualizerPlayerController extends ChangeNotifier implements AudioVis
 
   // --- Methods Delegated to Sub-Controllers ---
 
-  Future<void> setEqualizerConfig(EqualizerConfig config) async => equalizer.setConfig(config);
-  Future<void> setEqualizerEnabled(bool enabled) async => equalizer.setEnabled(enabled);
-  Future<void> setEqualizerBandCount(int bandCount) async => equalizer.setBandCount(bandCount);
-  Future<void> setEqualizerBandGain(int bandIndex, double gainDb) async => equalizer.setBandGain(bandIndex, gainDb);
-  Future<void> setEqualizerPreamp(double preampDb) async => equalizer.setPreamp(preampDb);
-  Future<void> setBassBoost(double gainDb) async => equalizer.setBassBoost(gainDb);
+  Future<void> setEqualizerConfig(EqualizerConfig config) async =>
+      equalizer.setConfig(config);
+  Future<void> setEqualizerEnabled(bool enabled) async =>
+      equalizer.setEnabled(enabled);
+  Future<void> setEqualizerBandCount(int bandCount) async =>
+      equalizer.setBandCount(bandCount);
+  Future<void> setEqualizerBandGain(int bandIndex, double gainDb) async =>
+      equalizer.setBandGain(bandIndex, gainDb);
+  Future<void> setEqualizerPreamp(double preampDb) async =>
+      equalizer.setPreamp(preampDb);
+  Future<void> setBassBoost(double gainDb) async =>
+      equalizer.setBassBoost(gainDb);
   void resetEqualizerDefaults() => equalizer.resetDefaults();
-  List<double> getEqualizerBandCenters({int? bandCount}) => equalizer.getBandCenters(bandCount: bandCount);
+  List<double> getEqualizerBandCenters({int? bandCount}) =>
+      equalizer.getBandCenters(bandCount: bandCount);
 }
