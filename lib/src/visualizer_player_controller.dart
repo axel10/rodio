@@ -26,11 +26,29 @@ export 'player_state_snapshot.dart';
 /// The top-level modular controller for audio playback and visualization.
 class AudioVisualizerPlayerController extends ChangeNotifier
     implements AudioVisualizerParent {
-  AudioVisualizerPlayerController({
-    this.fftSize = 1024,
-    this.analysisFrequencyHz = 30.0,
+  static AudioVisualizerPlayerController? _instance;
+
+  factory AudioVisualizerPlayerController({
+    int fftSize = 1024,
+    double analysisFrequencyHz = 30.0,
     Duration fadeDuration = Duration.zero,
     FadeMode fadeMode = FadeMode.sequential,
+    VisualizerOptimizationOptions visualOptions = const VisualizerOptimizationOptions(),
+  }) {
+    return _instance ??= AudioVisualizerPlayerController._internal(
+      fftSize: fftSize,
+      analysisFrequencyHz: analysisFrequencyHz,
+      fadeDuration: fadeDuration,
+      fadeMode: fadeMode,
+      visualOptions: visualOptions,
+    );
+  }
+
+  AudioVisualizerPlayerController._internal({
+    required this.fftSize,
+    required this.analysisFrequencyHz,
+    required Duration fadeDuration,
+    required FadeMode fadeMode,
     VisualizerOptimizationOptions visualOptions =
         const VisualizerOptimizationOptions(),
   }) {

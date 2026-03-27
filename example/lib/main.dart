@@ -231,7 +231,8 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   void dispose() {
     _subSmooth?.cancel();
     _subResponsive?.cancel();
-    _controller.dispose();
+    // 采用单例模式后，不应在此处直接销毁全局控制器，否则页面重建会无法清理定时器
+    // _controller.dispose(); 
     super.dispose();
   }
 
