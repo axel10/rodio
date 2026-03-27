@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:meta/meta.dart';
+import 'package:my_exoplayer/my_exoplayer.dart';
 import 'player_models.dart';
 import 'rust/api/simple_api.dart';
 
@@ -24,6 +26,7 @@ class EqualizerController extends ChangeNotifier {
 
   @internal
   Future<void> initialize() async {
+    if (Platform.isAndroid) return;
     try {
       _config = await getAudioEqualizerConfig();
       notifyListeners();
@@ -35,7 +38,15 @@ class EqualizerController extends ChangeNotifier {
   Future<void> setConfig(EqualizerConfig config) async {
     final normalized = _normalizeConfig(config);
     try {
-      await setAudioEqualizerConfig(config: normalized);
+      if (Platform.isAndroid) {
+        await MyExoplayer.setEqualizerConfig(
+          enabled: normalized.enabled,
+          bandGains: normalized.bandGainsDb.toList(),
+          bassBoostDb: normalized.bassBoostDb,
+        );
+      } else {
+        await setAudioEqualizerConfig(config: normalized);
+      }
       _config = normalized;
       notifyListeners();
     } catch (e) {

@@ -7,6 +7,7 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' }
     }
 
     dependencies {
@@ -19,6 +20,7 @@ rootProject.allprojects {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' }
     }
 }
 
@@ -49,8 +51,8 @@ android {
     }
 }
 
-apply from: "../cargokit/gradle/plugin.gradle"
-cargokit {
-    manifestDir = "../rust"
-    libname = "audio_visualizer_player"
-}
+// apply from: "../cargokit/gradle/plugin.gradle"
+// cargokit {
+//     manifestDir = "../rust"
+//     libname = "audio_visualizer_player"
+// }

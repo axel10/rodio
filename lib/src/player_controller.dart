@@ -1,8 +1,7 @@
-import 'dart:async';
-import 'dart:math' as math;
-
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:meta/meta.dart';
+import 'package:my_exoplayer/my_exoplayer.dart';
 
 import 'player_models.dart';
 import 'rust/api/simple_api.dart';
@@ -59,7 +58,7 @@ class PlayerController extends ChangeNotifier {
     PlaybackTransition strategy = const ImmediateTransition();
 
     if (switchingTracks && _fadeDuration > Duration.zero) {
-      if (_fadeMode == FadeMode.crossfade && isPlaying && autoPlay && position == null) {
+      if (_fadeMode == FadeMode.crossfade && isPlaying && autoPlay && position == null && !Platform.isAndroid) {
         strategy = CrossfadeTransition(duration: _fadeDuration);
       } else {
         strategy = SequentialFadeTransition(
@@ -93,15 +92,27 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await loadAudioFile(path: path);
-      await applyNativeVolume(nativeVolume ?? _volume);
-      final durationMs = await getAudioDurationMs();
-      _selectedPath = path;
-      _position = Duration.zero;
-      _duration = Duration(milliseconds: durationMs.toInt());
-      _lastCommandTime = DateTime.now();
-      _isPlaying = false;
-      _playerState = PlayerState.ready;
+      if (Platform.isAndroid) {
+        await MyExoplayer.load(path);
+        await MyExoplayer.setVolume(nativeVolume ?? _volume);
+        final durationMs = await MyExoplayer.getDuration();
+        _selectedPath = path;
+        _position = Duration.zero;
+        _duration = Duration(milliseconds: durationMs);
+        _lastCommandTime = DateTime.now();
+        _isPlaying = false;
+        _playerState = PlayerState.ready;
+      } else {
+        await loadAudioFile(path: path);
+        await applyNativeVolume(nativeVolume ?? _volume);
+        final durationMs = await getAudioDurationMs();
+        _selectedPath = path;
+        _position = Duration.zero;
+        _duration = Duration(milliseconds: durationMs.toInt());
+        _lastCommandTime = DateTime.now();
+        _isPlaying = false;
+        _playerState = PlayerState.ready;
+      }
     } catch (e) {
       setError('Load failed: $e');
     }
@@ -120,7 +131,11 @@ class PlayerController extends ChangeNotifier {
       if (_playerState == PlayerState.completed) {
         await seek(Duration.zero);
       }
-      await playAudio();
+      if (Platform.isAndroid) {
+        await MyExoplayer.play();
+      } else {
+        await playAudio();
+      }
       _lastCommandTime = DateTime.now();
       _isPlaying = true;
       _playerState = PlayerState.playing;
@@ -132,7 +147,11 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> pause() async {
     try {
-      await pauseAudio();
+      if (Platform.isAndroid) {
+        await MyExoplayer.pause();
+      } else {
+        await pauseAudio();
+      }
       _lastCommandTime = DateTime.now();
       _isPlaying = false;
       _playerState = PlayerState.paused;
@@ -155,7 +174,11 @@ class PlayerController extends ChangeNotifier {
     if (_selectedPath == null) return;
     final ms = target.inMilliseconds.clamp(0, _duration.inMilliseconds);
     try {
-      await seekAudioMs(positionMs: ms);
+      if (Platform.isAndroid) {
+        await MyExoplayer.seek(ms);
+      } else {
+        await seekAudioMs(positionMs: ms);
+      }
       _lastCommandTime = DateTime.now();
       _position = Duration(milliseconds: ms);
     } catch (e) {
@@ -181,7 +204,11 @@ class PlayerController extends ChangeNotifier {
   @internal
   Future<void> applyNativeVolume(double volume) async {
     final clamped = volume.clamp(0.0, 1.0);
-    await setAudioVolume(volume: clamped);
+    if (Platform.isAndroid) {
+      await MyExoplayer.setVolume(clamped);
+    } else {
+      await setAudioVolume(volume: clamped);
+    }
   }
 
   Future<bool> fadeNativeVolume({
@@ -197,7 +224,7 @@ class PlayerController extends ChangeNotifier {
       return _fadeSequence == sequence;
     }
 
-    final steps = math.max(1, (duration.inMilliseconds / 16).round());
+    final steps = (duration.inMilliseconds / 16).round().clamp(1, 1000);
     final stepDelay = Duration(microseconds: (duration.inMicroseconds / steps).round());
 
     for (var i = 1; i <= steps; i++) {
@@ -232,15 +259,27 @@ class PlayerController extends ChangeNotifier {
 
   @internal
   void applySnapshot(String? path, Duration position, Duration duration, bool isPlaying, double nativeVolume) {
-    if (DateTime.now().difference(_lastCommandTime) < const Duration(milliseconds: 500)) return;
+    final now = DateTime.now();
+    final recentlyCommanded = now.difference(_lastCommandTime) < const Duration(milliseconds: 500);
 
-    _selectedPath = path;
-    _position = position;
-    _duration = duration;
-    _isPlaying = isPlaying;
+    // Update duration and volume even if recently commanded
+    if (duration > Duration.zero) {
+      _duration = duration;
+    }
+    
     if (!_trackFadeTransitionActive) {
       _volume = nativeVolume;
     }
+
+    // Guard position and playing state to avoid "jumping" back to old state during command processing
+    if (recentlyCommanded) {
+       notifyListeners();
+       return;
+    }
+
+    _selectedPath = path;
+    _position = position;
+    _isPlaying = isPlaying;
     
     if (_isPlaying) {
       _playerState = PlayerState.playing;
@@ -262,11 +301,19 @@ class PlayerController extends ChangeNotifier {
 
   @internal
   void updatePosition(Duration position) {
+    if (DateTime.now().difference(_lastCommandTime) < const Duration(milliseconds: 500)) return;
+
     _position = position;
     if (_duration > Duration.zero && _position >= _duration - const Duration(milliseconds: 250)) {
       _isPlaying = false;
       _playerState = PlayerState.completed;
     }
+    notifyListeners();
+  }
+
+  @internal
+  void updateDuration(Duration duration) {
+    _duration = duration;
     notifyListeners();
   }
 

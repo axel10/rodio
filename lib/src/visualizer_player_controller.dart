@@ -12,7 +12,7 @@ import 'rust/api/simple_api.dart';
 import 'rust/frb_generated.dart';
 import 'fft_processor.dart';
 import 'player_state_snapshot.dart';
-import 'package:audio_session/audio_session.dart';
+import 'package:my_exoplayer/my_exoplayer.dart';
 import 'equalizer_controller.dart';
 
 export 'player_controller.dart';
@@ -74,10 +74,6 @@ class AudioVisualizerPlayerController extends ChangeNotifier
   Timer? _analysisTick;
   Timer? _renderTick;
   StreamSubscription<PlaybackState>? _playbackStateSubscription;
-  StreamSubscription? _audioSessionSubscription;
-  Timer? _deviceEventThrottleTimer;
-  DateTime? _lastDeviceEventExecution;
-  bool _hasPendingDeviceEvent = false;
 
   bool get isSupported =>
       Platform.isAndroid || Platform.isLinux || Platform.isWindows;
@@ -116,7 +112,7 @@ class AudioVisualizerPlayerController extends ChangeNotifier
       return;
     }
 
-    if (!_rustLibInitialized) {
+    if (!Platform.isAndroid && !_rustLibInitialized) {
       try {
         await RustLib.init();
         _rustLibInitialized = true;
@@ -133,7 +129,9 @@ class AudioVisualizerPlayerController extends ChangeNotifier
 
     // Initialize the Rust audio engine (starts device monitoring thread)
     try {
-      await initApp();
+      if (!Platform.isAndroid) {
+        await initApp();
+      }
     } catch (e) {
       player.setError('Audio engine init failed: $e');
       return;
@@ -146,10 +144,14 @@ class AudioVisualizerPlayerController extends ChangeNotifier
       return;
     }
 
-    _playbackStateSubscription = subscribePlaybackState().listen(
-      _applyPlaybackStateSnapshot,
-      onError: (e) => player.setError('Playback subscription failed: $e'),
-    );
+    if (Platform.isAndroid) {
+      _setupExoPlayerListeners();
+    } else {
+      _playbackStateSubscription = subscribePlaybackState().listen(
+        _applyPlaybackStateSnapshot,
+        onError: (e) => player.setError('Playback subscription failed: $e'),
+      );
+    }
 
     _analysisTick = Timer.periodic(
       _analysisInterval,
@@ -157,13 +159,29 @@ class AudioVisualizerPlayerController extends ChangeNotifier
     );
     _renderTick = Timer.periodic(_renderInterval, (_) => _onRenderTick());
 
-    if (Platform.isAndroid) {
-      unawaited(_setupAudioSession());
-    }
-
     visualizer.visualizerOutputManager.startAll();
     _initialized = true;
     notifyListeners();
+  }
+
+  void _setupExoPlayerListeners() {
+    MyExoplayer.setPlayerStateListener((
+        {required state,
+        required isPlaying,
+        required durationMs,
+        required positionMs}) {
+      player.applySnapshot(
+        player.currentPath,
+        Duration(milliseconds: positionMs),
+        Duration(milliseconds: durationMs),
+        isPlaying,
+        player.volume,
+      );
+
+      if (state == 'ENDED') {
+        unawaited(_handleAutoTransition());
+      }
+    });
   }
 
   @override
@@ -171,8 +189,6 @@ class AudioVisualizerPlayerController extends ChangeNotifier
     _analysisTick?.cancel();
     _renderTick?.cancel();
     _playbackStateSubscription?.cancel();
-    _audioSessionSubscription?.cancel();
-    _deviceEventThrottleTimer?.cancel();
     unawaited(disposeAudio());
     visualizer.dispose();
     player.dispose();
@@ -237,6 +253,10 @@ class AudioVisualizerPlayerController extends ChangeNotifier
   );
 
   Future<void> _onAnalysisTick() async {
+    if (Platform.isAndroid && player.isPlaying && !_isTransitioning) {
+      final posMs = await MyExoplayer.getCurrentPosition();
+      player.updatePosition(Duration(milliseconds: posMs));
+    }
     await _refreshLatestFftCache();
     visualizer.processAnalysisTick(player.isPlaying, player.position);
   }
@@ -288,48 +308,19 @@ class AudioVisualizerPlayerController extends ChangeNotifier
 
   Future<void> _refreshLatestFftCache() async {
     try {
-      _latestFftCache = (await getLatestFft())
-          .map((value) => value.toDouble())
-          .toList(growable: false);
+      if (Platform.isAndroid) {
+        _latestFftCache = await MyExoplayer.getLatestFft();
+      } else {
+        _latestFftCache = (await getLatestFft())
+            .map((value) => value.toDouble())
+            .toList(growable: false);
+      }
     } catch (e) {
       player.setError('FFT fetch failed: $e');
       _latestFftCache = const [];
     }
   }
 
-  Future<void> _setupAudioSession() async {
-    try {
-      final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
-
-      _audioSessionSubscription = session.devicesStream.listen((event) {
-        final now = DateTime.now();
-        const throttleDuration = Duration(milliseconds: 3000);
-
-        if (_lastDeviceEventExecution == null ||
-            now.difference(_lastDeviceEventExecution!) >= throttleDuration) {
-          // Trigger first event immediately
-          _lastDeviceEventExecution = now;
-          unawaited(handleDeviceChanged());
-        } else {
-          // If within 1.2s window, only schedule the last one to run at the end of the window
-          _hasPendingDeviceEvent = true;
-          _deviceEventThrottleTimer?.cancel();
-          final remaining =
-              throttleDuration - now.difference(_lastDeviceEventExecution!);
-          _deviceEventThrottleTimer = Timer(remaining, () {
-            if (_hasPendingDeviceEvent) {
-              _lastDeviceEventExecution = DateTime.now();
-              unawaited(handleDeviceChanged());
-              _hasPendingDeviceEvent = false;
-            }
-          });
-        }
-      });
-    } catch (e) {
-      debugPrint('[AudioSession] Setup failed: $e');
-    }
-  }
 
   Future<List<double>> getWaveform({
     required int expectedChunks,
@@ -339,6 +330,19 @@ class AudioVisualizerPlayerController extends ChangeNotifier
     final targetPath = filePath ?? player.currentPath;
     if (targetPath == null) return const [];
     try {
+      if (Platform.isAndroid) {
+        final rawData = await MyExoplayer.getWaveform(targetPath);
+        if (rawData.isEmpty) return const [];
+        
+        final List<double> result = [];
+        for (int i = 0; i < expectedChunks; i++) {
+          final int sourceIdx = (i * rawData.length / expectedChunks).floor();
+          // Normalize to 0.0 - 1.0. Amplituda typically returns 0-100.
+          result.add(rawData[sourceIdx] / 100.0);
+        }
+        return result;
+      }
+
       final clampedStride = sampleStride < 1 ? 1 : sampleStride;
       final data = (filePath != null)
           ? await extractWaveformForPath(
