@@ -205,6 +205,12 @@ impl PlayerController {
     ) -> Result<PlaybackDeck, String> {
         self.ensure_audio_output()?;
 
+        // 先把播放器挂载到系统混音器上 (制造时间差，让后台音频流消耗 Empty 缓冲区，彻底消除底层 Bug 隐患)
+        let player = self.create_player()?;
+        let latest_fft = Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS]));
+        clear_fft_buffer(&latest_fft);
+
+        // 耗时操作：打开文件、构建系统层级组件 (大约耗时几十毫秒以上)
         let file = File::open(path).map_err(|e| format!("open file failed: {e}"))?;
         let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {e}"))?;
 
@@ -214,10 +220,6 @@ impl PlayerController {
         } else {
             start_offset.min(total)
         };
-
-        let latest_fft = Arc::new(Mutex::new(vec![0.0; RAW_FFT_BINS]));
-        clear_fft_buffer(&latest_fft);
-        let player = self.create_player()?;
         player.set_volume((self.volume * gain).clamp(0.0, 1.0));
         let eq_source = EqSource::new(source, Arc::clone(&self.equalizer));
         if clamped_offset > Duration::ZERO {
