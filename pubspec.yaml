@@ -2,7 +2,7 @@ name: audio_visualizer_player
 description: "A new Flutter FFI plugin project."
 version: 0.0.1
 homepage:
-
+publish_to: 'none'
 environment:
   sdk: ^3.11.1
   flutter: '>=3.3.0'
@@ -16,7 +16,7 @@ dependencies:
   path_provider: ^2.1.5
   plugin_platform_interface: ^2.0.2
   my_exoplayer:
-    path: plugin/my_exoplayer
+    path: ./my_exoplayer
 
 
 dev_dependencies:

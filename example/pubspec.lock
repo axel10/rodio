@@ -281,7 +281,7 @@ packages:
   my_exoplayer:
     dependency: transitive
     description:
-      path: "../plugin/my_exoplayer"
+      path: "../my_exoplayer"
       relative: true
     source: path
     version: "0.0.1"

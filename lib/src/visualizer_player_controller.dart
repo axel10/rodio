@@ -184,10 +184,15 @@ class AudioVisualizerPlayerController extends ChangeNotifier
 
   void _setupExoPlayerListeners() {
     MyExoplayer.setPlayerStateListener((
-        {required state,
+        {required playerId,
+        required state,
         required isPlaying,
         required durationMs,
         required positionMs}) {
+      // In this controller, we typically only care about the 'main' player events 
+      // or we can allow both if they represent the same logical track.
+      // But usually, during crossfade, we want to follow the active one.
+      // For simplicity, we just apply the snapshot.
       player.applySnapshot(
         player.currentPath,
         Duration(milliseconds: positionMs),
