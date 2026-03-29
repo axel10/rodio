@@ -1,0 +1,52 @@
+import 'dart:async';
+import '../rust/api/simple/equalizer.dart';
+
+/// Define a unified status update for all platforms.
+class AudioStatus {
+  final String? path;
+  final Duration position;
+  final Duration duration;
+  final bool isPlaying;
+  final double volume;
+
+  AudioStatus({
+    this.path,
+    required this.position,
+    required this.duration,
+    required this.isPlaying,
+    required this.volume,
+  });
+}
+
+abstract class AudioEngine {
+  Future<void> initialize();
+  Future<void> dispose();
+
+  Future<void> load(String path);
+  Future<void> play();
+  Future<void> pause();
+  Future<void> seek(Duration position);
+  Future<void> setVolume(double volume);
+
+  Future<Duration> getDuration();
+  Future<Duration> getCurrentPosition();
+
+  // Visualization
+  Future<List<double>> getLatestFft();
+  Future<List<double>> getWaveform({
+    required String path,
+    required int expectedChunks,
+    int sampleStride = 1,
+  });
+
+  // Effects
+  Future<void> setEqualizerConfig(EqualizerConfig config);
+  Future<EqualizerConfig> getEqualizerConfig();
+  
+  // Platform specific features (optional or capabilities-based)
+  bool get supportsCrossfade;
+  Future<void> crossfade(String path, Duration duration);
+
+  // Status updates
+  Stream<AudioStatus> get statusStream;
+}
