@@ -58,7 +58,7 @@ class AudioCoreController extends ChangeNotifier
     }
 
     player = PlayerController(parent: this);
-    player.setFadeSettings(fadeSettings);
+    _initialFadeSettings = fadeSettings;
 
     playlist = PlaylistController(parent: this);
 
@@ -88,6 +88,7 @@ class AudioCoreController extends ChangeNotifier
   late final PlaylistController playlist;
   late final VisualizerController visualizer;
   late final EqualizerController equalizer;
+  late final FadeSettings _initialFadeSettings;
 
   List<double> _latestFftCache = const [];
 
@@ -158,6 +159,9 @@ class AudioCoreController extends ChangeNotifier
         _rustLibInitialized = true;
       }
     }
+
+    // Apply initial fade settings now that RustLib is ready
+    player.setFadeSettings(_initialFadeSettings);
 
     // Initialize the Rust audio engine (starts device monitoring thread)
     try {
