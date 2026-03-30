@@ -26,6 +26,7 @@ class AndroidAudioEngine implements AudioEngine {
           final int positionMs = call.arguments['position'] ?? 0;
           final int durationMs = call.arguments['duration'] ?? 0;
           final bool isPlaying = call.arguments['isPlaying'] ?? false;
+          final String? error = call.arguments['error'];
           
           _statusController.add(AudioStatus(
             path: _currentPath,
@@ -33,6 +34,7 @@ class AndroidAudioEngine implements AudioEngine {
             duration: Duration(milliseconds: durationMs),
             isPlaying: isPlaying,
             volume: _currentVolume,
+            error: error,
           ));
         }
       }

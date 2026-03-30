@@ -191,6 +191,7 @@ class AudioCoreController extends ChangeNotifier
           status.duration,
           status.isPlaying,
           status.volume,
+          error: status.error,
         );
         if (status.isPlaying == false && 
             status.duration > Duration.zero && 

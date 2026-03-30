@@ -224,7 +224,12 @@ class PlayerController extends ChangeNotifier {
   // --- External Sync Interface ---
 
   @internal
-  void applySnapshot(String? path, Duration position, Duration duration, bool isPlaying, double nativeVolume) {
+  void applySnapshot(String? path, Duration position, Duration duration, bool isPlaying, double nativeVolume, {String? error}) {
+    if (error != null) {
+      setError(error);
+      return;
+    }
+
     final now = DateTime.now();
     final recentlyCommanded = now.difference(_lastCommandTime) < const Duration(milliseconds: 500);
 

@@ -56,6 +56,7 @@ pub struct PlaybackState {
     pub is_playing: bool,
     pub volume: f32,
     pub path: Option<String>,
+    pub error: Option<String>,
 }
 
 struct PlaybackDeck {
@@ -329,6 +330,7 @@ impl PlayerController {
             is_playing,
             volume: self.volume,
             path: public_deck.map(|deck| deck.loaded_path.clone()),
+            error: None,
         }
     }
 
@@ -497,6 +499,7 @@ pub(super) fn snapshot_playback_state() -> PlaybackState {
             is_playing: false,
             volume: 1.0,
             path: None,
+            error: None,
         })
 }
 

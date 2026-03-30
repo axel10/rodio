@@ -121,6 +121,7 @@ class PlaybackState {
   final bool isPlaying;
   final double volume;
   final String? path;
+  final String? error;
 
   const PlaybackState({
     required this.positionMs,
@@ -128,6 +129,7 @@ class PlaybackState {
     required this.isPlaying,
     required this.volume,
     this.path,
+    this.error,
   });
 
   @override
@@ -136,7 +138,8 @@ class PlaybackState {
       durationMs.hashCode ^
       isPlaying.hashCode ^
       volume.hashCode ^
-      path.hashCode;
+      path.hashCode ^
+      error.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -147,5 +150,6 @@ class PlaybackState {
           durationMs == other.durationMs &&
           isPlaying == other.isPlaying &&
           volume == other.volume &&
-          path == other.path;
+          path == other.path &&
+          error == other.error;
 }

@@ -9,6 +9,7 @@ class AudioStatus {
   final Duration duration;
   final bool isPlaying;
   final double volume;
+  final String? error;
 
   AudioStatus({
     this.path,
@@ -16,6 +17,7 @@ class AudioStatus {
     required this.duration,
     required this.isPlaying,
     required this.volume,
+    this.error,
   });
 }
 

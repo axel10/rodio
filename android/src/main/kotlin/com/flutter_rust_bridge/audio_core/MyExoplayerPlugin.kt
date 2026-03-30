@@ -54,6 +54,10 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
                 sendPlayerState(id)
             }
 
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                sendPlayerState(id)
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 sendPlayerState(id)
             }
@@ -85,7 +89,8 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
                 },
                 "isPlaying" to p.isPlaying,
                 "duration" to clampedDuration,
-                "position" to p.currentPosition
+                "position" to p.currentPosition,
+                "error" to p.playerError?.message
             )
             inst.channel.invokeMethod("onPlayerStateChanged", stateMap)
         }

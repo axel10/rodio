@@ -20,6 +20,7 @@ class RustAudioEngine implements AudioEngine {
         duration: Duration(milliseconds: state.durationMs.toInt()),
         isPlaying: state.isPlaying,
         volume: state.volume,
+        error: state.error,
       ));
     });
   }

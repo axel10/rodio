@@ -1043,12 +1043,14 @@ impl SseDecode for crate::api::simple::controller::PlaybackState {
         let mut var_isPlaying = <bool>::sse_decode(deserializer);
         let mut var_volume = <f32>::sse_decode(deserializer);
         let mut var_path = <Option<String>>::sse_decode(deserializer);
+        let mut var_error = <Option<String>>::sse_decode(deserializer);
         return crate::api::simple::controller::PlaybackState {
             position_ms: var_positionMs,
             duration_ms: var_durationMs,
             is_playing: var_isPlaying,
             volume: var_volume,
             path: var_path,
+            error: var_error,
         };
     }
 }
@@ -1312,6 +1314,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::simple::controller::PlaybackS
             self.is_playing.into_into_dart().into_dart(),
             self.volume.into_into_dart().into_dart(),
             self.path.into_into_dart().into_dart(),
+            self.error.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1459,6 +1462,7 @@ impl SseEncode for crate::api::simple::controller::PlaybackState {
         <bool>::sse_encode(self.is_playing, serializer);
         <f32>::sse_encode(self.volume, serializer);
         <Option<String>>::sse_encode(self.path, serializer);
+        <Option<String>>::sse_encode(self.error, serializer);
     }
 }
 
