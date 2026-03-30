@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath>
 #include <atomic>
+#include <mutex>
 
 enum FilterType {
     PEAKING,
@@ -63,6 +64,7 @@ public:
     void process(float* buffer, int numSamples, int channels);
 
 private:
+    mutable std::mutex mMutex;
     float mSampleRate;
     std::atomic<float> mTargetPreAmpLinear{1.0f};
     float mCurrentPreAmpLinear{1.0f};

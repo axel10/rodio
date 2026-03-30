@@ -26,6 +26,9 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
     // Thread-safe storage for the latest magnitude spectrum
     private val latestMagnitudes = AtomicReference<FloatArray>(FloatArray(fftSize / 2))
 
+    @Volatile
+    var isPaused: Boolean = false
+
     init {
         // Pre-calculate Hanning window
         for (i in 0 until fftSize) {
@@ -101,7 +104,7 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
     }
 
     private fun runFft() {
-        if (sampleCount < fftSize) return
+        if (isPaused || sampleCount < fftSize) return
 
         for (i in 0 until fftSize) {
             // Get the latest fftSize samples in chronological order

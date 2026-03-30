@@ -59,6 +59,7 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playerContexts[id]?.fftProcessor?.isPaused = !isPlaying
                 sendPlayerState(id)
             }
 

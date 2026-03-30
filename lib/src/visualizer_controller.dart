@@ -31,6 +31,7 @@ class VisualizerController extends ChangeNotifier {
 
   bool _fftEnabled = true;
   int _lastAnalysisMicros = 0;
+  List<double> _currentRawBins = const [];
 
   final StreamController<FftFrame> _rawFftController = StreamController<FftFrame>.broadcast();
   final StreamController<FftFrame> _optimizedFftController = StreamController<FftFrame>.broadcast();
@@ -48,10 +49,7 @@ class VisualizerController extends ChangeNotifier {
 
   void _initVisualizerOutputManager() {
     visualizerOutputManager = VisualizerOutputManager(
-      fftSourceProvider: () {
-        final bins = _getLatestFft();
-        return bins.isEmpty ? <double>[] : List<double>.from(bins);
-      },
+      fftSourceProvider: () => _currentRawBins,
     );
   }
 
@@ -73,6 +71,7 @@ class VisualizerController extends ChangeNotifier {
     _fftProcessor.resetState();
     visualizerOutputManager.resetAll();
     _lastAnalysisMicros = 0;
+    _currentRawBins = const [];
     notifyListeners();
   }
 
@@ -80,12 +79,18 @@ class VisualizerController extends ChangeNotifier {
   void processAnalysisTick(bool isPlaying, Duration position) {
     if (!_fftEnabled) return;
 
-    List<double> rawBins = List<double>.from(_getLatestFft());
-    if (rawBins.isEmpty) return;
+    final engineBins = _getLatestFft();
     
+    List<double> rawBins;
     if (!isPlaying) {
-      rawBins = List<double>.filled(rawBins.length, 0.0);
+      final length = engineBins.isNotEmpty ? engineBins.length : (_currentRawBins.isNotEmpty ? _currentRawBins.length : 0);
+      if (length == 0) return;
+      rawBins = List<double>.filled(length, 0.0);
+    } else {
+      if (engineBins.isEmpty) return;
+      rawBins = List<double>.from(engineBins);
     }
+    _currentRawBins = rawBins;
 
     final nowMicros = DateTime.now().microsecondsSinceEpoch;
     final dtSec = _lastAnalysisMicros == 0

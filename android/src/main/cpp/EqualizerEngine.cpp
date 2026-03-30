@@ -127,9 +127,12 @@ void BiquadFilter::processNeon(float* buffer, int numSamples, int channels) {
 EqualizerEngine::EqualizerEngine() : mSampleRate(44100.0f) {}
 
 void EqualizerEngine::init(int numBands, float sampleRate, int channels) {
+    std::lock_guard<std::mutex> lock(mMutex);
     mSampleRate = sampleRate;
     mBands.clear();
     
+    if (numBands < 1) return;
+
     float defaultFrequencies[] = {31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0};
     
     for (int i = 0; i < numBands; ++i) {
@@ -139,7 +142,8 @@ void EqualizerEngine::init(int numBands, float sampleRate, int channels) {
         } else {
              float minFreq = 31.25f;
              float maxFreq = 16000.0f;
-             freq = minFreq * std::pow(maxFreq / minFreq, (float)i / (numBands - 1));
+             float exponent = (numBands > 1) ? (float)i / (numBands - 1) : 0.0f;
+             freq = minFreq * std::pow(maxFreq / minFreq, exponent);
         }
         EqualizerBand band;
         band.targetFrequency.store(freq, std::memory_order_relaxed);
@@ -156,18 +160,21 @@ void EqualizerEngine::init(int numBands, float sampleRate, int channels) {
 }
 
 void EqualizerEngine::setBandGain(int index, float gainDb) {
+    std::lock_guard<std::mutex> lock(mMutex);
     if (index >= 0 && index < (int)mBands.size()) {
         mBands[index].targetGainDb.store(gainDb, std::memory_order_relaxed);
     }
 }
 
 void EqualizerEngine::setBandFrequency(int index, float frequency) {
+    std::lock_guard<std::mutex> lock(mMutex);
     if (index >= 0 && index < (int)mBands.size()) {
         mBands[index].targetFrequency.store(frequency, std::memory_order_relaxed);
     }
 }
 
 void EqualizerEngine::setBandQ(int index, float Q) {
+    std::lock_guard<std::mutex> lock(mMutex);
     if (index >= 0 && index < (int)mBands.size()) {
         mBands[index].targetQ.store(Q, std::memory_order_relaxed);
     }
@@ -179,6 +186,7 @@ void EqualizerEngine::setPreAmp(float gainDb) {
 }
 
 void EqualizerEngine::process(float* buffer, int numSamples, int channels) {
+    std::lock_guard<std::mutex> lock(mMutex);
     int totalSamples = numSamples * channels;
     const float SMOOTH_FACTOR = 0.2f;
 
