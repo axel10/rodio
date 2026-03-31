@@ -49,11 +49,12 @@ class PlayerController extends ChangeNotifier {
     Duration? position,
     required void Function(bool progressing) onStateChanged,
   }) async {
+    final isAutoTransition = _playerState == PlayerState.completed;
     final switchingTracks = _selectedPath != null && _selectedPath != uri;
-    
+
     PlaybackTransition strategy = const ImmediateTransition();
 
-    if (switchingTracks && _fadeSettings.fadeOnSwitch && _fadeSettings.duration > Duration.zero) {
+    if (switchingTracks && !isAutoTransition && _fadeSettings.fadeOnSwitch && _fadeSettings.duration > Duration.zero) {
       if (_fadeSettings.mode == FadeMode.crossfade && _parent.engine.supportsCrossfade) {
         strategy = NativeCrossfadeTransition(
           duration: _fadeSettings.duration,
