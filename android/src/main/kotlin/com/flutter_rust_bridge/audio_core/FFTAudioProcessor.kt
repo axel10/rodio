@@ -41,6 +41,9 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
             inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
+        if (inputAudioFormat.channelCount <= 0 || inputAudioFormat.sampleRate <= 0) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
         // Always output 16-bit PCM
         return AudioFormat(inputAudioFormat.sampleRate, inputAudioFormat.channelCount, C.ENCODING_PCM_16BIT)
     }

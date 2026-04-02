@@ -142,6 +142,7 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
 
         val player = ExoPlayer.Builder(safeContext, renderersFactory)
             .setAudioAttributes(audioAttributes, true)
+            .setWakeMode(androidx.media3.common.C.WAKE_MODE_LOCAL)
             .build()
         
         player.addAnalyticsListener(EventLogger())

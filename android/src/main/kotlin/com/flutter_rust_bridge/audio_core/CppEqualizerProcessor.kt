@@ -57,6 +57,9 @@ class CppEqualizerProcessor : BaseAudioProcessor() {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT && inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
+        if (inputAudioFormat.channelCount <= 0 || inputAudioFormat.sampleRate <= 0) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
         
         // Native initialization
         Log.d("CppEqualizer", "Configuring EQ. SampleRate: ${inputAudioFormat.sampleRate} Hz, Channels: ${inputAudioFormat.channelCount}")

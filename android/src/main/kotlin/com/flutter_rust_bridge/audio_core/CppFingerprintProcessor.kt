@@ -28,6 +28,9 @@ class CppFingerprintProcessor : BaseAudioProcessor() {
             // Chromaprint expects 16-bit PCM. We'll let Exoplayer convert it before us
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
+        if (inputAudioFormat.channelCount <= 0 || inputAudioFormat.sampleRate <= 0) {
+            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        }
         
         if (nativeHandle != 0L) {
             ChromaprintNative.nativeDestroy(nativeHandle)
