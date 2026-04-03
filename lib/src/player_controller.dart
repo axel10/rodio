@@ -282,6 +282,22 @@ class PlayerController extends ChangeNotifier {
 
     // Guard position and playing state to avoid "jumping" back to old state during command processing
     if (recentlyCommanded) {
+      _selectedPath = path;
+      _isPlaying = isPlaying;
+      if (!isPlaying) {
+        _position = position;
+        if (_selectedPath != null &&
+            _duration > Duration.zero &&
+            _position.inMilliseconds >= (_duration.inMilliseconds - 250)) {
+          _playerState = PlayerState.completed;
+        } else if (_selectedPath != null) {
+          _playerState = PlayerState.paused;
+        } else {
+          _playerState = PlayerState.idle;
+        }
+      } else {
+        _playerState = PlayerState.playing;
+      }
       notifyListeners();
       return;
     }

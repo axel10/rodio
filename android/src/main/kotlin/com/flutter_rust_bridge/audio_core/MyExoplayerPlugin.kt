@@ -36,7 +36,8 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
         val cppFingerprintProcessor: CppFingerprintProcessor,
         var equalizer: Equalizer? = null,
         var bassBoost: BassBoost? = null,
-        var volumeAnimator: ValueAnimator? = null
+        var volumeAnimator: ValueAnimator? = null,
+        var volumeCommandGeneration: Long = 0L
     )
 
     companion object {
@@ -96,6 +97,13 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
             )
             inst.channel.invokeMethod("onPlayerStateChanged", stateMap)
         }
+
+        private fun beginVolumeCommand(ctx: PlayerContext): Long {
+            ctx.volumeAnimator?.cancel()
+            ctx.volumeAnimator = null
+            ctx.volumeCommandGeneration += 1
+            return ctx.volumeCommandGeneration
+        }
     }
 
     private lateinit var channel: MethodChannel
@@ -142,6 +150,7 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
 
         val player = ExoPlayer.Builder(safeContext, renderersFactory)
             .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
             .setWakeMode(androidx.media3.common.C.WAKE_MODE_LOCAL)
             .build()
         
@@ -280,10 +289,11 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
             "play" -> {
                 val fadeDurationMs = call.argument<Int>("fadeDurationMs")?.toLong() ?: 0L
                 val targetVolume = call.argument<Double>("targetVolume")?.toFloat() ?: ctx.player.volume
+                val commandGeneration = beginVolumeCommand(ctx)
                 if (fadeDurationMs > 0) {
                     ctx.player.volume = 0f
                     ctx.player.play()
-                    fadeVolumeTo(ctx, targetVolume, fadeDurationMs)
+                    fadeVolumeTo(ctx, targetVolume, fadeDurationMs, commandGeneration)
                 } else {
                     ctx.player.play()
                 }
@@ -291,9 +301,11 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
             }
             "pause" -> {
                 val fadeDurationMs = call.argument<Int>("fadeDurationMs")?.toLong() ?: 0L
+                val commandGeneration = beginVolumeCommand(ctx)
                 if (fadeDurationMs > 0) {
                     val originalVolume = ctx.player.volume
-                    fadeVolumeTo(ctx, 0f, fadeDurationMs) {
+                    fadeVolumeTo(ctx, 0f, fadeDurationMs, commandGeneration) {
+                        if (ctx.volumeCommandGeneration != commandGeneration) return@fadeVolumeTo
                         ctx.player.pause()
                         ctx.player.volume = originalVolume
                     }
@@ -310,8 +322,9 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
             "setVolume" -> {
                 val volume = call.argument<Double>("volume")?.toFloat() ?: 1.0f
                 val fadeDurationMs = call.argument<Int>("fadeDurationMs")?.toLong() ?: 0L
+                val commandGeneration = beginVolumeCommand(ctx)
                 if (fadeDurationMs > 0) {
-                    fadeVolumeTo(ctx, volume, fadeDurationMs)
+                    fadeVolumeTo(ctx, volume, fadeDurationMs, commandGeneration)
                 } else {
                     ctx.player.volume = volume
                 }
@@ -420,21 +433,42 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
 
     }
 
-    private fun fadeVolumeTo(ctx: PlayerContext, targetVolume: Float, durationMs: Long, onEnd: (() -> Unit)? = null) {
+    private fun fadeVolumeTo(
+        ctx: PlayerContext,
+        targetVolume: Float,
+        durationMs: Long,
+        commandGeneration: Long,
+        onEnd: (() -> Unit)? = null
+    ) {
         ctx.volumeAnimator?.cancel()
         val startVolume = ctx.player.volume
         val animator = ValueAnimator.ofFloat(startVolume, targetVolume)
         animator.duration = durationMs
         animator.addUpdateListener { animation ->
+            if (ctx.volumeCommandGeneration != commandGeneration) {
+                animation.cancel()
+                return@addUpdateListener
+            }
             ctx.player.volume = animation.animatedValue as Float
         }
         animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationCancel(animation: android.animation.Animator) {
+                if (ctx.volumeAnimator === animator) {
+                    ctx.volumeAnimator = null
+                }
+            }
+
             override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (ctx.volumeCommandGeneration != commandGeneration) return
+                if (ctx.volumeAnimator === animator) {
+                    ctx.volumeAnimator = null
+                }
                 onEnd?.invoke()
             }
         })
         ctx.volumeAnimator = animator
         Handler(Looper.getMainLooper()).post {
+            if (ctx.volumeCommandGeneration != commandGeneration) return@post
             animator.start()
         }
     }

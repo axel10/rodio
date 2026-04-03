@@ -6,20 +6,52 @@ import 'package:file_picker/file_picker.dart';
 import 'equalizer_panel.dart';
 import 'widgets.dart';
 import 'random_lab_tab.dart';
+import 'audio_handler.dart';
+import 'package:audio_service/audio_service.dart';
+
+late AudioCoreHandler audioHandler;
 
 void main() async {
   // 确保 Flutter 绑定已初始化
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Android 下不使用 Rust，因此不需要初始化 RustLib
-  // if (!Platform.isAndroid) {
-  //   await RustLib.init();
-  // }
-  runApp(const MyApp());
+  final controller = AudioCoreController(
+    fftSize: 1024,
+    analysisFrequencyHz: 30,
+    fadeSettings: const FadeSettings(
+      fadeOnSwitch: true,
+      fadeOnPauseResume: true,
+      duration: Duration(milliseconds: 500),
+      mode: FadeMode.crossfade,
+    ),
+    visualOptions: const VisualizerOptimizationOptions(
+      smoothingCoefficient: 0.35,
+      gravityCoefficient: 10,
+      logarithmicScale: 4,
+      normalizationFloorDb: -85,
+      aggregationMode: FftAggregationMode.peak,
+      frequencyGroups: 64,
+      targetFrameRate: 60,
+      groupContrastExponent: 1.6,
+      overallMultiplier: 1.2,
+    ),
+  );
+
+  audioHandler = await AudioService.init(
+    builder: () => AudioCoreHandler(controller),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'com.flutter_rust_bridge.audio_core.channel.audio',
+      androidNotificationChannelName: 'Audio Playback',
+      androidNotificationOngoing: true,
+    ),
+  );
+
+  runApp(MyApp(controller: controller));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final AudioCoreController controller;
+  const MyApp({super.key, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -29,13 +61,14 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const VisualizerDemoPage(),
+      home: VisualizerDemoPage(controller: controller),
     );
   }
 }
 
 class VisualizerDemoPage extends StatefulWidget {
-  const VisualizerDemoPage({super.key});
+  final AudioCoreController controller;
+  const VisualizerDemoPage({super.key, required this.controller});
 
   @override
   State<VisualizerDemoPage> createState() => _VisualizerDemoPageState();
@@ -58,28 +91,13 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   @override
   void initState() {
     super.initState();
-    _controller = AudioCoreController(
-      fftSize: 1024,
-      analysisFrequencyHz: 30,
-      fadeSettings: const FadeSettings(
-        fadeOnSwitch: true,
-        fadeOnPauseResume: true,
-        duration: Duration(milliseconds: 500),
-        mode: FadeMode.crossfade,
-      ),
-      visualOptions: const VisualizerOptimizationOptions(
-        smoothingCoefficient: 0.35,
-        gravityCoefficient: 10,
-        logarithmicScale: 4,
-        normalizationFloorDb: -85,
-        aggregationMode: FftAggregationMode.peak,
-        frequencyGroups: 64,
-        targetFrameRate: 60,
-        groupContrastExponent: 1.6,
-        overallMultiplier: 1.2,
-      ),
-    );
-    _controller.initialize();
+    _controller = widget.controller;
+    // _controller.initialize(); // Already initialized or will be initialized via handler logic if needed
+    // However, the original code had _controller.initialize() here. 
+    // Since it's a plugin demo, let's keep it but ensure it's idempotent.
+    if (!_controller.isInitialized) {
+      _controller.initialize();
+    }
 
     // 创建平滑风格输出流 - 高平滑、低响应速度
     final smoothOutput = _controller.visualizer.createOutput(
