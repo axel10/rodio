@@ -236,4 +236,10 @@ class AndroidAudioEngine implements AudioEngine {
     );
     return result?.cast<String, dynamic>();
   }
+
+  @override
+  Future<void> prepareForFileWrite() async {}
+
+  @override
+  Future<void> finishFileWrite() async {}
 }

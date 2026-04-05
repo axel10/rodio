@@ -56,4 +56,8 @@ abstract class AudioEngine {
 
   // Status updates
   Stream<AudioStatus> get statusStream;
+
+  // File synchronization (locking)
+  Future<void> prepareForFileWrite();
+  Future<void> finishFileWrite();
 }

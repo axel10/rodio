@@ -407,8 +407,8 @@ class AudioCoreController extends ChangeNotifier
 
   /// Updates the metadata of a given track using the provided [updateCallback].
   ///
-  /// If the track is currently playing, it will be temporarily paused on Windows
-  /// to release file handles before writing.
+  /// If the track is currently playing, it will call the engine's synchronization
+  /// methods to release file handles before writing.
   Future<bool> updateMetadata(
     AudioTrack track,
     void Function(ParserTag metadata) updateCallback,
@@ -421,20 +421,22 @@ class AudioCoreController extends ChangeNotifier
     }
 
     final isCurrentTrack = player.currentPath == path;
-    final wasPlaying = player.isPlaying;
+    final fileSize = file.lengthSync();
+    // Only use engine synchronization for large files (60MB+),
+    // because smaller files are loaded into memory and handles are released quickly in Rust.
+    final needsSync = isCurrentTrack && fileSize >= 60 * 1024 * 1024;
 
     try {
-      if (isCurrentTrack && Platform.isWindows) {
-        // Release file handle on Windows by pausing/stopping
-        await player.pause();
+      if (needsSync) {
+        await _engine.prepareForFileWrite();
         // Give the OS a moment to release the handle
         await Future.delayed(const Duration(milliseconds: 200));
       }
 
       amr.updateMetadata(file, updateCallback);
 
-      if (isCurrentTrack && wasPlaying) {
-        await player.play();
+      if (needsSync) {
+        await _engine.finishFileWrite();
       }
 
       notifyListeners();
@@ -442,10 +444,10 @@ class AudioCoreController extends ChangeNotifier
     } catch (e) {
       debugPrint('updateMetadata failed: $e');
       player.setError('Metadata update failed: $e');
-      
-      // Try to resume even if failed
-      if (isCurrentTrack && wasPlaying && !player.isPlaying) {
-        await player.play();
+
+      // Try to restore playback state even if failed
+      if (needsSync) {
+        await _engine.finishFileWrite().catchError((_) {});
       }
       return false;
     }

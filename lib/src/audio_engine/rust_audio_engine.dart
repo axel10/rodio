@@ -120,4 +120,10 @@ class RustAudioEngine implements AudioEngine {
       return null;
     }
   }
+
+  @override
+  Future<void> prepareForFileWrite() => rust.prepareForFileWrite();
+
+  @override
+  Future<void> finishFileWrite() => rust.finishFileWrite();
 }
