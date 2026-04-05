@@ -167,6 +167,8 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   Future<void> _bootstrapAudioLibrary() async {
     if (!Platform.isAndroid) return;
 
+    // 启动时先拿权限，然后从 Android 侧读取系统媒体库。
+    // 这里拿到的是平面列表，后面会在 Dart 侧构建成文件夹树。
     setState(() {
       _mediaLibraryLoading = true;
       _mediaLibraryError = null;
@@ -206,6 +208,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
         await _bootstrapAudioLibrary();
       }
 
+      // Android 上不再走 file_picker，而是弹出我们自己写的媒体库面板。
       final refreshedRoot = _mediaLibraryRoot;
       if (refreshedRoot == null) {
         if (!mounted) return;

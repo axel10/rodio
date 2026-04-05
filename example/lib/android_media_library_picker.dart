@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:audio_core/audio_core.dart';
 
 class AndroidMediaLibraryApi {
+  // 这个 channel 对应 Android 侧的 MainActivity，
+  // 先申请权限，再拿到 MediaStore 扫出来的音频列表。
   static const MethodChannel _channel = MethodChannel(
     'audio_core.media_library',
   );
@@ -13,6 +15,7 @@ class AndroidMediaLibraryApi {
   }
 
   Future<List<AudioLibraryEntry>> scanAudioLibrary() async {
+    // Android 端返回的是平面列表，这里负责把 Map 转成 Dart 对象。
     final result = await _channel.invokeMethod<List<dynamic>>(
       'scanAudioLibrary',
     );
@@ -120,6 +123,7 @@ class AudioLibraryFolder {
 }
 
 AudioLibraryFolder buildAudioLibraryTree(List<AudioLibraryEntry> entries) {
+  // Flutter 侧把平面列表整理成目录树，方便做自定义文件选择面板。
   final root = AudioLibraryFolder(name: 'All Audio', path: '');
   final nodes = <String, AudioLibraryFolder>{'': root};
 
@@ -179,6 +183,7 @@ Future<AudioLibraryEntry?> showAndroidMediaLibraryPicker(
   BuildContext context, {
   required AudioLibraryFolder root,
 }) {
+  // 这里就是自定义的文件选择面板，不是系统文件选择器。
   return showModalBottomSheet<AudioLibraryEntry>(
     context: context,
     isScrollControlled: true,

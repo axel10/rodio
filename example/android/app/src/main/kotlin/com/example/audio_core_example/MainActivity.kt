@@ -13,6 +13,7 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.Result
 
 class MainActivity : AudioServiceActivity() {
+    // Flutter 侧通过这个 channel 先请求权限，再拉取系统媒体库扫描结果。
     private val mediaLibraryChannelName = "audio_core.media_library"
     private val permissionRequestCode = 4892
     private var pendingPermissionResult: Result? = null
@@ -79,6 +80,8 @@ class MainActivity : AudioServiceActivity() {
             return
         }
 
+        // 这里不是调用第三方扫描包，而是直接查询 Android 的 MediaStore。
+        // 返回给 Flutter 的是平面列表，每一项都包含音频的 URI、标题、歌手、专辑和文件夹路径。
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.DISPLAY_NAME,
@@ -146,6 +149,7 @@ class MainActivity : AudioServiceActivity() {
             }
         }
 
+        // Flutter 端会把这个 List<Map<...>> 转成 AudioLibraryEntry，再构建自己的文件树面板。
         result.success(items)
     }
 
