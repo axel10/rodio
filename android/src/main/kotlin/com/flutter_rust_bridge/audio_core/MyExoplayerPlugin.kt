@@ -319,6 +319,15 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler {
                 ctx.player.seekTo(positionMs)
                 result.success(null)
             }
+            "prepareForFileWrite" -> {
+                beginVolumeCommand(ctx)
+                ctx.player.playWhenReady = false
+                ctx.player.stop()
+                ctx.player.clearMediaItems()
+                ctx.fftProcessor.isPaused = true
+                sendPlayerState(playerId)
+                result.success(null)
+            }
             "setVolume" -> {
                 val volume = call.argument<Double>("volume")?.toFloat() ?: 1.0f
                 val fadeDurationMs = call.argument<Int>("fadeDurationMs")?.toLong() ?: 0L

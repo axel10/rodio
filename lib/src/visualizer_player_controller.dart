@@ -422,9 +422,11 @@ class AudioCoreController extends ChangeNotifier
 
     final isCurrentTrack = player.currentPath == path;
     final fileSize = file.lengthSync();
-    // Only use engine synchronization for large files (60MB+),
-    // because smaller files are loaded into memory and handles are released quickly in Rust.
-    final needsSync = isCurrentTrack && fileSize >= 60 * 1024 * 1024;
+    // On Android, we release the active player before writing and restore it after.
+    // On other platforms (Windows), only files >= 60MB need this because smaller
+    // files are loaded into memory by the Rust engine.
+    final needsSync =
+        isCurrentTrack && (Platform.isAndroid || fileSize >= 60 * 1024 * 1024);
 
     try {
       if (needsSync) {

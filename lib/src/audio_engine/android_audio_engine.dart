@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../rust/api/simple/equalizer.dart';
 import '../player_models.dart';
 import 'audio_engine_interface.dart';
@@ -13,6 +14,8 @@ class AndroidAudioEngine implements AudioEngine {
   FadeSettings _fadeSettings = const FadeSettings();
   final String _activePlayerId = 'main';
   EqualizerConfig? _lastConfig;
+  bool _isPlaying = false;
+  _PendingAndroidEdit? _pendingEdit;
 
   @override
   Stream<AudioStatus> get statusStream => _statusController.stream;
@@ -27,6 +30,8 @@ class AndroidAudioEngine implements AudioEngine {
           final int durationMs = call.arguments['duration'] ?? 0;
           final bool isPlaying = call.arguments['isPlaying'] ?? false;
           final String? error = call.arguments['error'];
+
+          _isPlaying = isPlaying;
 
           _statusController.add(
             AudioStatus(
@@ -47,6 +52,7 @@ class AndroidAudioEngine implements AudioEngine {
 
   @override
   Future<void> dispose() async {
+    _pendingEdit = null;
     await _statusController.close();
     await _channel.invokeMethod('dispose', {'playerId': 'main'});
     await _channel.invokeMethod('dispose', {'playerId': 'crossfade'});
@@ -218,12 +224,13 @@ class AndroidAudioEngine implements AudioEngine {
   @override
   Future<String?> extractFingerprint(String path) async {
     try {
-      final String? fingerprint = await _channel.invokeMethod('extractFingerprint', {
-        'path': path,
-      });
+      final String? fingerprint = await _channel.invokeMethod(
+        'extractFingerprint',
+        {'path': path},
+      );
       return fingerprint;
     } catch (e) {
-      print("Fingerprint extraction failed: $e");
+      debugPrint("Fingerprint extraction failed: $e");
       return null;
     }
   }
@@ -238,8 +245,53 @@ class AndroidAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> prepareForFileWrite() async {}
+  Future<void> prepareForFileWrite() async {
+    final path = _currentPath;
+    if (path == null) return;
+
+    final pos = await getCurrentPosition();
+    _pendingEdit = _PendingAndroidEdit(
+      path: path,
+      position: pos,
+      wasPlaying: _isPlaying,
+    );
+
+    await _channel.invokeMethod('prepareForFileWrite', {
+      'playerId': _activePlayerId,
+    });
+  }
 
   @override
-  Future<void> finishFileWrite() async {}
+  Future<void> finishFileWrite() async {
+    final edit = _pendingEdit;
+    if (edit == null) return;
+
+    try {
+      // Reload the audio file and restore the previous playback point.
+      await load(edit.path);
+      await seek(edit.position);
+      if (edit.wasPlaying) {
+        await _channel.invokeMethod('play', {
+          'playerId': _activePlayerId,
+          'fadeDurationMs': 0,
+        });
+      }
+      _pendingEdit = null;
+    } catch (_) {
+      // Keep the pending snapshot so callers can attempt recovery again.
+      rethrow;
+    }
+  }
+}
+
+class _PendingAndroidEdit {
+  final String path;
+  final Duration position;
+  final bool wasPlaying;
+
+  _PendingAndroidEdit({
+    required this.path,
+    required this.position,
+    required this.wasPlaying,
+  });
 }
