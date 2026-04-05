@@ -31,6 +31,7 @@ class AudioLibraryEntry {
   const AudioLibraryEntry({
     required this.id,
     required this.uri,
+    required this.filePath,
     required this.title,
     required this.folderPath,
     this.displayName,
@@ -43,6 +44,7 @@ class AudioLibraryEntry {
 
   final String id;
   final String uri;
+  final String? filePath;
   final String title;
   final String folderPath;
   final String? displayName;
@@ -59,13 +61,17 @@ class AudioLibraryEntry {
   );
 
   String get label => title.trim().isEmpty
-      ? (displayName?.trim().isNotEmpty == true ? displayName!.trim() : uri)
+      ? (displayName?.trim().isNotEmpty == true
+            ? displayName!.trim()
+            : (filePath ?? uri))
       : title.trim();
 
   AudioTrack toAudioTrack() {
+    // 播放时优先用本地文件路径，这样后面改封面时 File(...) 才能直接打开。
+    final playbackPath = filePath ?? uri;
     return AudioTrack(
       id: id,
-      uri: uri,
+      uri: playbackPath,
       title: label,
       artist: artist,
       album: album,
@@ -74,6 +80,8 @@ class AudioLibraryEntry {
         'isLike': false,
         'playCount': 0,
         'folderPath': folderPath,
+        'mediaUri': uri,
+        if (filePath != null) 'filePath': filePath,
         if (displayName != null) 'displayName': displayName,
         if (bucketDisplayName != null) 'bucketDisplayName': bucketDisplayName,
         if (mimeType != null) 'mimeType': mimeType,
@@ -85,6 +93,7 @@ class AudioLibraryEntry {
     return AudioLibraryEntry(
       id: map['id']?.toString() ?? '',
       uri: map['uri']?.toString() ?? '',
+      filePath: map['filePath']?.toString(),
       title:
           map['title']?.toString() ??
           map['displayName']?.toString() ??

@@ -81,7 +81,8 @@ class MainActivity : AudioServiceActivity() {
         }
 
         // 这里不是调用第三方扫描包，而是直接查询 Android 的 MediaStore。
-        // 返回给 Flutter 的是平面列表，每一项都包含音频的 URI、标题、歌手、专辑和文件夹路径。
+        // 返回给 Flutter 的是平面列表，每一项都包含音频的 URI、标题、歌手、专辑、
+        // 文件夹路径，以及写封面时真正需要的本地文件路径。
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.DISPLAY_NAME,
@@ -135,6 +136,7 @@ class MainActivity : AudioServiceActivity() {
                     mapOf(
                         "id" to id.toString(),
                         "uri" to contentUri,
+                        "filePath" to dataPath,
                         "title" to cursor.getString(titleIndex),
                         "displayName" to cursor.getString(displayNameIndex),
                         "artist" to cursor.getString(artistIndex),
