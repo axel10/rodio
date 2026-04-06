@@ -133,15 +133,11 @@ class RustAudioEngine implements AudioEngine {
     required String path,
     required Map<String, Object?> metadata,
   }) async {
-    try {
-      await rust.updateTrackMetadata(
-        path: path,
-        metadata: _trackMetadataUpdateFromMap(metadata),
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
+    await rust.updateTrackMetadata(
+      path: path,
+      metadata: _trackMetadataUpdateFromMap(metadata),
+    );
+    return true;
   }
 
   rust.TrackMetadataUpdate _trackMetadataUpdateFromMap(

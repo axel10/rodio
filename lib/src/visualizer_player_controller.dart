@@ -537,8 +537,16 @@ class AudioCoreController extends ChangeNotifier
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('updateMetadata failed: $e');
-      player.setError('Metadata update failed: $e');
+      final errorText = e is PlatformException
+          ? [
+              if (e.code.isNotEmpty) e.code,
+              if (e.message != null && e.message!.isNotEmpty) e.message!,
+              if (e.details != null) 'details: ${e.details}',
+            ].join(' | ')
+          : e.toString();
+
+      debugPrint('updateMetadata failed: $errorText');
+      player.setError('Metadata update failed: $errorText');
 
       if (managePlaybackSync && needsSync) {
         await _engine.finishFileWrite().catchError((_) {});
