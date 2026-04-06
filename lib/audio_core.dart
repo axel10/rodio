@@ -14,3 +14,4 @@ export 'src/visualizer_output_config.dart';
 export 'src/visualizer_output_stream.dart';
 export 'src/visualizer_output_manager.dart';
 export 'src/android_track_metadata.dart';
+export 'src/android_media_library.dart';

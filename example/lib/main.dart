@@ -79,7 +79,6 @@ class VisualizerDemoPage extends StatefulWidget {
 
 class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
   late final AudioCoreController _controller;
-  final AndroidMediaLibraryApi _mediaLibraryApi = AndroidMediaLibraryApi();
   StreamSubscription<FftFrame>? _subSmooth;
   StreamSubscription<FftFrame>? _subResponsive;
   List<double> _bandsSmooth = const [];
@@ -172,16 +171,16 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     });
 
     try {
-      final granted = await _mediaLibraryApi.ensureAudioPermission();
-      if (!granted) {
-        throw StateError('Audio permission was not granted.');
-      }
-
-      final entries = await _mediaLibraryApi.scanAudioLibrary();
+      final scanResult = await _controller.scanAndroidMediaLibrary();
       if (!mounted) return;
       setState(() {
-        _mediaLibraryRoot = buildAudioLibraryTree(entries);
         _mediaLibraryLoading = false;
+        _mediaLibraryError = scanResult.isSuccessful
+            ? null
+            : scanResult.errorMessage ?? scanResult.errorCode;
+        _mediaLibraryRoot = scanResult.permissionGranted
+            ? buildAudioLibraryTree(scanResult.entries)
+            : null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -251,7 +250,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     await _registerImportedTracks(tracks, addToActivePlaylist: true);
   }
 
-  Future<AudioLibraryEntry?> _openAndroidMediaLibraryPicker(
+  Future<AndroidMediaLibraryEntry?> _openAndroidMediaLibraryPicker(
     AudioLibraryFolder root,
   ) {
     return showAndroidMediaLibraryPicker(context, root: root);

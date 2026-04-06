@@ -1,113 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:audio_core/audio_core.dart';
-
-class AndroidMediaLibraryApi {
-  // 这个 channel 对应 Android 侧的 MainActivity，
-  // 先申请权限，再拿到 MediaStore 扫出来的音频列表。
-  static const MethodChannel _channel = MethodChannel(
-    'audio_core.media_library',
-  );
-
-  Future<bool> ensureAudioPermission() async {
-    final granted = await _channel.invokeMethod<bool>('ensureAudioPermission');
-    return granted ?? false;
-  }
-
-  Future<List<AudioLibraryEntry>> scanAudioLibrary() async {
-    // Android 端返回的是平面列表，这里负责把 Map 转成 Dart 对象。
-    final result = await _channel.invokeMethod<List<dynamic>>(
-      'scanAudioLibrary',
-    );
-    if (result == null) return const [];
-    return result
-        .whereType<Map>()
-        .map((item) => AudioLibraryEntry.fromMap(item.cast<dynamic, dynamic>()))
-        .toList();
-  }
-}
-
-class AudioLibraryEntry {
-  const AudioLibraryEntry({
-    required this.id,
-    required this.uri,
-    required this.filePath,
-    required this.title,
-    required this.folderPath,
-    this.displayName,
-    this.artist,
-    this.album,
-    this.durationMs,
-    this.bucketDisplayName,
-    this.mimeType,
-  });
-
-  final String id;
-  final String uri;
-  final String? filePath;
-  final String title;
-  final String folderPath;
-  final String? displayName;
-  final String? artist;
-  final String? album;
-  final int? durationMs;
-  final String? bucketDisplayName;
-  final String? mimeType;
-
-  Duration get duration => Duration(
-    milliseconds: durationMs == null
-        ? 0
-        : durationMs!.clamp(0, 1 << 31).toInt(),
-  );
-
-  String get label => title.trim().isEmpty
-      ? (displayName?.trim().isNotEmpty == true
-            ? displayName!.trim()
-            : (filePath ?? uri))
-      : title.trim();
-
-  AudioTrack toAudioTrack() {
-    // 播放时优先用本地文件路径，这样后面改封面时 File(...) 才能直接打开。
-    final playbackPath = filePath ?? uri;
-    return AudioTrack(
-      id: id,
-      uri: playbackPath,
-      title: label,
-      artist: artist,
-      album: album,
-      duration: durationMs == null ? null : Duration(milliseconds: durationMs!),
-      metadata: <String, Object?>{
-        'isLike': false,
-        'playCount': 0,
-        'folderPath': folderPath,
-        'mediaUri': uri,
-        if (filePath != null) 'filePath': filePath,
-        if (displayName != null) 'displayName': displayName,
-        if (bucketDisplayName != null) 'bucketDisplayName': bucketDisplayName,
-        if (mimeType != null) 'mimeType': mimeType,
-      },
-    );
-  }
-
-  factory AudioLibraryEntry.fromMap(Map<dynamic, dynamic> map) {
-    return AudioLibraryEntry(
-      id: map['id']?.toString() ?? '',
-      uri: map['uri']?.toString() ?? '',
-      filePath: map['filePath']?.toString(),
-      title:
-          map['title']?.toString() ??
-          map['displayName']?.toString() ??
-          'Unknown title',
-      folderPath: _normalizeFolderPath(map['relativePath']?.toString() ?? ''),
-      displayName: map['displayName']?.toString(),
-      artist: map['artist']?.toString(),
-      album: map['album']?.toString(),
-      durationMs: (map['durationMs'] as num?)?.toInt(),
-      bucketDisplayName: map['bucketDisplayName']?.toString(),
-      mimeType: map['mimeType']?.toString(),
-    );
-  }
-}
 
 class AudioLibraryFolder {
   AudioLibraryFolder({required this.name, required this.path});
@@ -115,7 +7,7 @@ class AudioLibraryFolder {
   final String name;
   final String path;
   final List<AudioLibraryFolder> children = <AudioLibraryFolder>[];
-  final List<AudioLibraryEntry> items = <AudioLibraryEntry>[];
+  final List<AndroidMediaLibraryEntry> items = <AndroidMediaLibraryEntry>[];
 
   String get displayName => path.isEmpty ? 'All Audio' : name;
 
@@ -131,7 +23,9 @@ class AudioLibraryFolder {
   }
 }
 
-AudioLibraryFolder buildAudioLibraryTree(List<AudioLibraryEntry> entries) {
+AudioLibraryFolder buildAudioLibraryTree(
+  List<AndroidMediaLibraryEntry> entries,
+) {
   // Flutter 侧把平面列表整理成目录树，方便做自定义文件选择面板。
   final root = AudioLibraryFolder(name: 'All Audio', path: '');
   final nodes = <String, AudioLibraryFolder>{'': root};
@@ -188,12 +82,12 @@ String _normalizeFolderPath(String path) {
       : cleaned;
 }
 
-Future<AudioLibraryEntry?> showAndroidMediaLibraryPicker(
+Future<AndroidMediaLibraryEntry?> showAndroidMediaLibraryPicker(
   BuildContext context, {
   required AudioLibraryFolder root,
 }) {
   // 这里就是自定义的文件选择面板，不是系统文件选择器。
-  return showModalBottomSheet<AudioLibraryEntry>(
+  return showModalBottomSheet<AndroidMediaLibraryEntry>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -250,7 +144,7 @@ class _AudioLibrarySheetState extends State<_AudioLibrarySheet> {
     });
   }
 
-  bool _matchesQuery(AudioLibraryEntry entry) {
+  bool _matchesQuery(AndroidMediaLibraryEntry entry) {
     if (_query.isEmpty) return true;
     return [
       entry.label,
@@ -261,8 +155,8 @@ class _AudioLibrarySheetState extends State<_AudioLibrarySheet> {
     ].any((value) => value.toLowerCase().contains(_query));
   }
 
-  List<AudioLibraryEntry> _allEntries(AudioLibraryFolder folder) {
-    final items = <AudioLibraryEntry>[...folder.items];
+  List<AndroidMediaLibraryEntry> _allEntries(AudioLibraryFolder folder) {
+    final items = <AndroidMediaLibraryEntry>[...folder.items];
     for (final child in folder.children) {
       items.addAll(_allEntries(child));
     }

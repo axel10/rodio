@@ -1,12 +1,21 @@
 package com.flutter_rust_bridge.audio_core
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.media.audiofx.Equalizer
 import android.media.audiofx.BassBoost
 import android.os.Build
+import android.provider.MediaStore
+import android.animation.ValueAnimator
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.OptIn
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -25,16 +34,16 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry.ActivityResultListener
-
-import android.app.Activity
-import android.provider.MediaStore
-import android.animation.ValueAnimator
-import android.os.Handler
-import android.os.Looper
+import io.flutter.plugin.common.PluginRegistry.RequestPermissionsResultListener
 
 @UnstableApi
 /** MyExoplayerPlugin */
-class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, ActivityResultListener {
+class MyExoplayerPlugin :
+    FlutterPlugin,
+    MethodCallHandler,
+    ActivityAware,
+    ActivityResultListener,
+    RequestPermissionsResultListener {
     private class PlayerContext(
         val id: String,
         val player: ExoPlayer,
@@ -51,6 +60,7 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
         private var instance: MyExoplayerPlugin? = null
         private val playerContexts = mutableMapOf<String, PlayerContext>()
         private const val REQUEST_WRITE_MEDIA = 43041
+        private const val REQUEST_READ_MEDIA = 4892
 
         init {
             System.loadLibrary("my_exoplayer")
@@ -115,11 +125,13 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
     }
 
     private lateinit var channel: MethodChannel
+    private lateinit var mediaLibraryChannel: MethodChannel
     private var context: Context? = null
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var amplituda: Amplituda? = null
     private var pendingMetadataWrite: PendingMetadataWrite? = null
+    private var pendingMediaLibraryPermissionResult: Result? = null
 
     private data class PendingMetadataWrite(
         val path: String,
@@ -132,6 +144,11 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
         context = flutterPluginBinding.applicationContext
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "my_exoplayer")
         channel.setMethodCallHandler(this)
+        mediaLibraryChannel = MethodChannel(
+            flutterPluginBinding.binaryMessenger,
+            "audio_core.media_library",
+        )
+        mediaLibraryChannel.setMethodCallHandler(this)
         
         amplituda = Amplituda(context)
         // Initialize default player
@@ -230,6 +247,14 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
         when (call.method) {
             "sayHello" -> {
                 result.success(null)
+                return
+            }
+            "ensureAudioPermission" -> {
+                handleEnsureAudioPermission(result)
+                return
+            }
+            "scanAudioLibrary" -> {
+                handleScanAudioLibrary(result)
                 return
             }
             "getWaveform" -> {
@@ -470,6 +495,156 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
             }
         }
 
+    }
+
+    private fun handleEnsureAudioPermission(result: Result) {
+        if (hasAudioPermission()) {
+            result.success(true)
+            return
+        }
+
+        if (pendingMediaLibraryPermissionResult != null) {
+            result.error(
+                "PERMISSION_PENDING",
+                "An audio permission request is already in progress.",
+                null,
+            )
+            return
+        }
+
+        val safeActivity = activity ?: run {
+            result.error(
+                "NO_ACTIVITY",
+                "Android activity is not attached, cannot request audio permission.",
+                null,
+            )
+            return
+        }
+
+        pendingMediaLibraryPermissionResult = result
+        ActivityCompat.requestPermissions(
+            safeActivity,
+            requiredPermissions(),
+            REQUEST_READ_MEDIA,
+        )
+    }
+
+    private fun handleScanAudioLibrary(result: Result) {
+        if (!hasAudioPermission()) {
+            result.error(
+                "PERMISSION_DENIED",
+                "Audio library permission has not been granted.",
+                null,
+            )
+            return
+        }
+
+        val safeContext = context ?: run {
+            result.error("INTERNAL_ERROR", "Context is null", null)
+            return
+        }
+
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.RELATIVE_PATH,
+            MediaStore.Audio.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.Audio.Media.DATE_ADDED,
+            MediaStore.Audio.Media.DATA,
+        )
+
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+        val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
+        val items = mutableListOf<Map<String, Any?>>()
+
+        safeContext.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            null,
+            sortOrder,
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val displayNameIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+            val titleIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val artistIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val albumIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+            val durationIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val relativePathIndex = cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+            val bucketNameIndex = cursor.getColumnIndex(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
+            val mimeTypeIndex = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+            val dateAddedIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED)
+            val dataIndex = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idIndex)
+                val contentUri = Uri.withAppendedPath(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    id.toString(),
+                ).toString()
+                val relativePath = if (relativePathIndex >= 0) cursor.getString(relativePathIndex) else null
+                val dataPath = if (dataIndex >= 0) cursor.getString(dataIndex) else null
+                val folderPath = relativePath?.takeIf { it.isNotBlank() }
+                    ?: dataPath?.substringBeforeLast('/', missingDelimiterValue = "")
+                    ?: ""
+
+                items.add(
+                    mapOf(
+                        "id" to id.toString(),
+                        "uri" to contentUri,
+                        "filePath" to dataPath,
+                        "title" to cursor.getString(titleIndex),
+                        "displayName" to cursor.getString(displayNameIndex),
+                        "artist" to cursor.getString(artistIndex),
+                        "album" to cursor.getString(albumIndex),
+                        "durationMs" to cursor.getLong(durationIndex),
+                        "relativePath" to folderPath,
+                        "bucketDisplayName" to if (bucketNameIndex >= 0) cursor.getString(bucketNameIndex) else null,
+                        "mimeType" to if (mimeTypeIndex >= 0) cursor.getString(mimeTypeIndex) else null,
+                        "dateAddedSeconds" to if (dateAddedIndex >= 0) cursor.getLong(dateAddedIndex) else null,
+                    ),
+                )
+            }
+        }
+
+        result.success(items)
+    }
+
+    private fun hasAudioPermission(): Boolean {
+        val safeActivity = activity
+        val safeContext = context ?: return false
+        val target = safeActivity ?: safeContext
+        return requiredPermissions().all {
+            ContextCompat.checkSelfPermission(target, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (requestCode != REQUEST_READ_MEDIA) return false
+
+        val granted = grantResults.isNotEmpty() &&
+            grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+
+        pendingMediaLibraryPermissionResult?.success(granted)
+        pendingMediaLibraryPermissionResult = null
+        return true
     }
 
     private fun fadeVolumeTo(
@@ -757,11 +932,14 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        mediaLibraryChannel.setMethodCallHandler(null)
         instance = null
         amplituda = null
         context = null
         pendingMetadataWrite = null
+        pendingMediaLibraryPermissionResult = null
         activityBinding?.removeActivityResultListener(this)
+        activityBinding?.removeRequestPermissionsResultListener(this)
         activityBinding = null
         activity = null
     }
@@ -770,10 +948,12 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
         activity = binding.activity
         activityBinding = binding
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
         activityBinding?.removeActivityResultListener(this)
+        activityBinding?.removeRequestPermissionsResultListener(this)
         activityBinding = null
         activity = null
     }
@@ -782,10 +962,12 @@ class MyExoplayerPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Activ
         activity = binding.activity
         activityBinding = binding
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
     }
 
     override fun onDetachedFromActivity() {
         activityBinding?.removeActivityResultListener(this)
+        activityBinding?.removeRequestPermissionsResultListener(this)
         activityBinding = null
         activity = null
     }

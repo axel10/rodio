@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'player_models.dart';
 import 'playlist_models.dart';
@@ -17,6 +18,7 @@ import 'audio_engine/audio_engine_interface.dart';
 import 'audio_engine/android_audio_engine.dart';
 import 'audio_engine/rust_audio_engine.dart';
 import 'android_track_metadata.dart';
+import 'android_media_library.dart';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart' as amr;
 
 export 'player_controller.dart';
@@ -26,10 +28,14 @@ export 'visualizer_controller.dart';
 export 'equalizer_controller.dart';
 export 'playlist_models.dart';
 export 'player_state_snapshot.dart';
+export 'android_media_library.dart';
 
 /// The top-level modular controller for audio playback and visualization.
 class AudioCoreController extends ChangeNotifier
     implements AudioVisualizerParent {
+  static const MethodChannel _androidMediaLibraryChannel = MethodChannel(
+    'audio_core.media_library',
+  );
   static AudioCoreController? _instance;
 
   factory AudioCoreController({
@@ -384,6 +390,79 @@ class AudioCoreController extends ChangeNotifier
     } catch (e) {
       player.setError('Waveform failed: $e');
       return const [];
+    }
+  }
+
+  /// Requests Android audio library permission through the platform bridge.
+  Future<bool> ensureAndroidMediaLibraryPermission() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final granted = await _androidMediaLibraryChannel.invokeMethod<bool>(
+        'ensureAudioPermission',
+      );
+      return granted ?? false;
+    } catch (e) {
+      debugPrint('ensureAndroidMediaLibraryPermission failed: $e');
+      return false;
+    }
+  }
+
+  /// Scans Android's MediaStore and returns a strongly typed result.
+  Future<AndroidMediaLibraryScanResult> scanAndroidMediaLibrary() async {
+    if (!Platform.isAndroid) {
+      return const AndroidMediaLibraryScanResult(
+        permissionGranted: false,
+        entries: <AndroidMediaLibraryEntry>[],
+        errorCode: 'UNSUPPORTED_PLATFORM',
+        errorMessage:
+            'Android media library scan is only available on Android.',
+      );
+    }
+
+    final granted = await ensureAndroidMediaLibraryPermission();
+    if (!granted) {
+      return const AndroidMediaLibraryScanResult(
+        permissionGranted: false,
+        entries: <AndroidMediaLibraryEntry>[],
+        errorCode: 'PERMISSION_DENIED',
+        errorMessage: 'Audio library permission was not granted.',
+      );
+    }
+
+    try {
+      final rawResult = await _androidMediaLibraryChannel
+          .invokeMethod<List<Object?>>('scanAudioLibrary');
+      final entries = <AndroidMediaLibraryEntry>[];
+      for (final item in rawResult ?? const <Object?>[]) {
+        if (item is Map<Object?, Object?>) {
+          entries.add(AndroidMediaLibraryEntry.fromMap(item));
+        } else if (item is Map) {
+          entries.add(
+            AndroidMediaLibraryEntry.fromMap(item.cast<Object?, Object?>()),
+          );
+        }
+      }
+
+      return AndroidMediaLibraryScanResult(
+        permissionGranted: true,
+        entries: entries,
+      );
+    } on PlatformException catch (e) {
+      debugPrint('scanAndroidMediaLibrary failed: ${e.code} ${e.message}');
+      return AndroidMediaLibraryScanResult(
+        permissionGranted: true,
+        entries: const <AndroidMediaLibraryEntry>[],
+        errorCode: e.code,
+        errorMessage: e.message,
+      );
+    } catch (e) {
+      debugPrint('scanAndroidMediaLibrary failed: $e');
+      return AndroidMediaLibraryScanResult(
+        permissionGranted: true,
+        entries: const <AndroidMediaLibraryEntry>[],
+        errorCode: 'SCAN_FAILED',
+        errorMessage: e.toString(),
+      );
     }
   }
 
