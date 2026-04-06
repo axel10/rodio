@@ -93,3 +93,11 @@ pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> any
 
     Ok(())
 }
+
+pub fn remove_all_tags(path: String) -> anyhow::Result<()> {
+    let tagged_file = Probe::open(&path)?.read()?;
+    for tag in tagged_file.tags() {
+        tag.tag_type().remove_from_path(&path)?;
+    }
+    Ok(())
+}
