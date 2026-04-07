@@ -1,7 +1,15 @@
+use std::path::Path;
+
 use lofty::config::WriteOptions;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
+
+use id3::frame::{
+    Comment as Id3Comment, ExtendedText as Id3ExtendedText, Lyrics as Id3Lyrics,
+    Picture as Id3Picture, PictureType as Id3PictureType,
+};
+use id3::{Tag as Id3Tag, TagLike as _, Version as Id3Version};
 
 #[derive(Debug, Clone, Default)]
 pub struct TrackPicture {
@@ -34,6 +42,122 @@ pub struct TrackMetadataUpdate {
 }
 
 pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> anyhow::Result<()> {
+    if should_use_id3(&path) {
+        return update_track_metadata_with_id3(path, metadata);
+    }
+
+    update_track_metadata_with_lofty(path, metadata)
+}
+
+fn should_use_id3(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp3" | "wav" | "aiff" | "aif")
+    )
+}
+
+fn update_track_metadata_with_id3(
+    path: String,
+    metadata: TrackMetadataUpdate,
+) -> anyhow::Result<()> {
+    let mut tag = Id3Tag::read_from_path(&path).unwrap_or_else(|_| Id3Tag::new());
+
+    if let Some(v) = metadata.title {
+        tag.set_title(v);
+    }
+    if let Some(v) = metadata.artist {
+        tag.set_artist(v);
+    }
+    if let Some(v) = metadata.album {
+        tag.set_album(v);
+    }
+    if let Some(v) = metadata.album_artist {
+        tag.set_album_artist(v);
+    }
+    if let Some(v) = metadata.track_number {
+        tag.set_track(v as u32);
+    }
+    if let Some(v) = metadata.track_total {
+        tag.set_total_tracks(v as u32);
+    }
+    if let Some(v) = metadata.disc_number {
+        tag.set_disc(v as u32);
+    }
+    if let Some(v) = metadata.date {
+        tag.set_text("TDRC", v);
+    } else if let Some(v) = metadata.year {
+        tag.set_year(v);
+    }
+
+    if let Some(v) = metadata.comment {
+        tag.add_frame(Id3Comment {
+            lang: "eng".to_string(),
+            description: String::new(),
+            text: v,
+        });
+    }
+
+    if let Some(v) = metadata.lyrics {
+        tag.add_frame(Id3Lyrics {
+            lang: "eng".to_string(),
+            description: String::new(),
+            text: v,
+        });
+    }
+
+    if let Some(v) = metadata.composer {
+        tag.set_text("TCOM", v);
+    }
+    if let Some(v) = metadata.lyricist {
+        tag.set_text("TEXT", v);
+    }
+    if let Some(v) = metadata.performer {
+        tag.set_text("TPE3", v);
+    }
+    if let Some(v) = metadata.conductor {
+        tag.add_frame(Id3ExtendedText {
+            description: "CONDUCTOR".to_string(),
+            value: v,
+        });
+    }
+    if let Some(v) = metadata.remixer {
+        tag.add_frame(Id3ExtendedText {
+            description: "REMIXER".to_string(),
+            value: v,
+        });
+    }
+
+    if let Some(v) = metadata.genres.first() {
+        tag.set_genre(v.clone());
+    }
+
+    for pic in metadata.pictures {
+        let pic_type = match pic.picture_type.to_lowercase().as_str() {
+            "front" | "cover front" | "front cover" => Id3PictureType::CoverFront,
+            "back" | "cover back" | "back cover" => Id3PictureType::CoverBack,
+            _ => Id3PictureType::Other,
+        };
+
+        tag.add_frame(Id3Picture {
+            mime_type: pic.mime_type,
+            picture_type: pic_type,
+            description: pic.description.unwrap_or_default(),
+            data: pic.bytes,
+        });
+    }
+
+    tag.write_to_path(&path, Id3Version::Id3v24)?;
+    Ok(())
+}
+
+fn update_track_metadata_with_lofty(
+    path: String,
+    metadata: TrackMetadataUpdate,
+) -> anyhow::Result<()> {
     // 1. 读取音频文件 (简洁版本，参考 demo)
     let mut tagged_file = Probe::open(&path)?.read()?;
 
@@ -49,7 +173,7 @@ pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> any
             }
         },
     };
-    
+
     // 如果歌曲是 ID3v1，则将其转换为 ID3v2，旧的 v1 标签保留在原处
     if tag.tag_type() == TagType::Id3v1 {
         println!("ID3v1 detected, upgrading to ID3v2...");
@@ -58,29 +182,62 @@ pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> any
     }
 
     // 3. 设置标签内容 (全部交给 lofty Accessor 和 ItemKey 处理)
-    if let Some(v) = metadata.title { tag.set_title(v); }
-    if let Some(v) = metadata.artist { tag.set_artist(v); }
-    if let Some(v) = metadata.album { tag.set_album(v); }
-    if let Some(v) = metadata.genres.get(0) { tag.set_genre(v.clone()); }
-    if let Some(v) = metadata.track_number { tag.set_track(v as u32); }
-    if let Some(v) = metadata.track_total { tag.set_track_total(v as u32); }
-    if let Some(v) = metadata.disc_number { tag.set_disk(v as u32); }
-    if let Some(v) = metadata.date { tag.insert_text(ItemKey::RecordingDate, v); }
-    else if let Some(v) = metadata.year { tag.insert_text(ItemKey::Year, v.to_string()); }
+    if let Some(v) = metadata.title {
+        tag.set_title(v);
+    }
+    if let Some(v) = metadata.artist {
+        tag.set_artist(v);
+    }
+    if let Some(v) = metadata.album {
+        tag.set_album(v);
+    }
+    if let Some(v) = metadata.genres.get(0) {
+        tag.set_genre(v.clone());
+    }
+    if let Some(v) = metadata.track_number {
+        tag.set_track(v as u32);
+    }
+    if let Some(v) = metadata.track_total {
+        tag.set_track_total(v as u32);
+    }
+    if let Some(v) = metadata.disc_number {
+        tag.set_disk(v as u32);
+    }
+    if let Some(v) = metadata.date {
+        tag.insert_text(ItemKey::RecordingDate, v);
+    } else if let Some(v) = metadata.year {
+        tag.insert_text(ItemKey::Year, v.to_string());
+    }
 
     // 其他通用项
-    if let Some(v) = metadata.album_artist { tag.insert_text(ItemKey::AlbumArtist, v); }
-    if let Some(v) = metadata.comment { tag.insert_text(ItemKey::Comment, v); }
-    if let Some(v) = metadata.lyrics { tag.insert_text(ItemKey::UnsyncLyrics, v); }
-    if let Some(v) = metadata.composer { tag.insert_text(ItemKey::Composer, v); }
-    if let Some(v) = metadata.lyricist { tag.insert_text(ItemKey::Lyricist, v); }
-    if let Some(v) = metadata.performer { tag.insert_text(ItemKey::Performer, v); }
-    if let Some(v) = metadata.conductor { tag.insert_text(ItemKey::Conductor, v); }
-    if let Some(v) = metadata.remixer { tag.insert_text(ItemKey::Remixer, v); }
+    if let Some(v) = metadata.album_artist {
+        tag.insert_text(ItemKey::AlbumArtist, v);
+    }
+    if let Some(v) = metadata.comment {
+        tag.insert_text(ItemKey::Comment, v);
+    }
+    if let Some(v) = metadata.lyrics {
+        tag.insert_text(ItemKey::UnsyncLyrics, v);
+    }
+    if let Some(v) = metadata.composer {
+        tag.insert_text(ItemKey::Composer, v);
+    }
+    if let Some(v) = metadata.lyricist {
+        tag.insert_text(ItemKey::Lyricist, v);
+    }
+    if let Some(v) = metadata.performer {
+        tag.insert_text(ItemKey::Performer, v);
+    }
+    if let Some(v) = metadata.conductor {
+        tag.insert_text(ItemKey::Conductor, v);
+    }
+    if let Some(v) = metadata.remixer {
+        tag.insert_text(ItemKey::Remixer, v);
+    }
 
     // 图片处理
     if !metadata.pictures.is_empty() {
-        use lofty::picture::{Picture, PictureType, MimeType};
+        use lofty::picture::{MimeType, Picture, PictureType};
         for pic in metadata.pictures {
             let pic_type = match pic.picture_type.to_lowercase().as_str() {
                 "front" | "cover front" | "front cover" => PictureType::CoverFront,
@@ -88,10 +245,12 @@ pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> any
                 _ => PictureType::Other,
             };
             tag.remove_picture_type(pic_type);
-            tag.push_picture(Picture::unchecked(pic.bytes)
-                .mime_type(MimeType::from_str(&pic.mime_type))
-                .pic_type(pic_type)
-                .build());
+            tag.push_picture(
+                Picture::unchecked(pic.bytes)
+                    .mime_type(MimeType::from_str(&pic.mime_type))
+                    .pic_type(pic_type)
+                    .build(),
+            );
         }
     }
 
@@ -102,6 +261,11 @@ pub fn update_track_metadata(path: String, metadata: TrackMetadataUpdate) -> any
 }
 
 pub fn remove_all_tags(path: String) -> anyhow::Result<()> {
+    if should_use_id3(&path) {
+        id3::v1v2::remove_from_path(&path)?;
+        return Ok(());
+    }
+
     let tagged_file = Probe::open(&path)?.read()?;
     for tag in tagged_file.tags() {
         tag.tag_type().remove_from_path(&path)?;

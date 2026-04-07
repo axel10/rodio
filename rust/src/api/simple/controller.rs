@@ -354,9 +354,7 @@ impl PlayerController {
 
     fn playback_state_snapshot(&self) -> PlaybackState {
         let public_deck = self.public_deck();
-        let is_playing = public_deck
-            .map(PlaybackDeck::is_playing)
-            .unwrap_or(false)
+        let is_playing = public_deck.map(PlaybackDeck::is_playing).unwrap_or(false)
             && !self.pause_fade_in_progress;
 
         PlaybackState {
