@@ -252,6 +252,7 @@ class AudioCoreController extends ChangeNotifier
     required bool autoPlay,
     Duration? position,
     PlaybackReason reason = PlaybackReason.playlistChanged,
+    FadeSettings? fadeSetting,
   }) async {
     final track = playlist.currentTrack;
     if (track == null) return;
@@ -261,6 +262,7 @@ class AudioCoreController extends ChangeNotifier
       autoPlay: autoPlay,
       position: position,
       reason: reason,
+      fadeSetting: fadeSetting,
       onStateChanged: (progressing) {
         _isTransitioning = progressing;
         notifyListeners();
@@ -284,6 +286,18 @@ class AudioCoreController extends ChangeNotifier
   Future<void> clearPlayback() async {
     player.stopPlayback();
     visualizer.resetState();
+  }
+
+  /// Resets the playback session to the initial empty state.
+  Future<void> resetPlaybackState() async {
+    await disposeAudio();
+    player.stopPlayback();
+    player.setFadeActive(false);
+    visualizer.resetState();
+    await playlist.resetPlaybackState();
+    _latestFftCache = const [];
+    _isTransitioning = false;
+    notifyListeners();
   }
 
   @override

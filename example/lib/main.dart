@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:audio_core/audio_core.dart';
 import 'package:file_picker/file_picker.dart';
 import 'equalizer_panel.dart';
+import 'fade_demo_tab.dart';
 import 'widgets.dart';
 import 'random_lab_tab.dart';
 import 'audio_handler.dart';
@@ -191,7 +192,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     }
   }
 
-  Future<void> _pickAudio() async {
+  Future<void> _pickAudio({FadeSettings? fadeSetting}) async {
     debugPrint('Select Audio clicked');
     if (!_controller.isInitialized) {
       debugPrint('Controller not initialized, initializing now...');
@@ -217,9 +218,11 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       final selected = await _openAndroidMediaLibraryPicker(refreshedRoot);
       if (selected == null) return;
 
-      await _registerImportedTracks([
-        selected.toAudioTrack(),
-      ], addToActivePlaylist: true);
+      await _registerImportedTracks(
+        [selected.toAudioTrack()],
+        addToActivePlaylist: true,
+        fadeSetting: fadeSetting,
+      );
       return;
     }
 
@@ -247,7 +250,11 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       return;
     }
 
-    await _registerImportedTracks(tracks, addToActivePlaylist: true);
+    await _registerImportedTracks(
+      tracks,
+      addToActivePlaylist: true,
+      fadeSetting: fadeSetting,
+    );
   }
 
   Future<AndroidMediaLibraryEntry?> _openAndroidMediaLibraryPicker(
@@ -280,6 +287,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     bool addToActivePlaylist = false,
     bool addToQueue = false,
     String? targetPlaylistId,
+    FadeSettings? fadeSetting,
   }) async {
     if (tracks.isEmpty) return;
 
@@ -287,10 +295,10 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     _randomLabKey.currentState?.addTracksToLibrary(tracks);
 
     if (addToActivePlaylist) {
-      await _controller.playlist.addTracks(tracks);
+      await _controller.playlist.addTracks(tracks, fadeSetting: fadeSetting);
       if (!_controller.player.isPlaying &&
           _controller.player.currentPath != null) {
-        await _controller.player.play();
+        await _controller.player.play(fadeSetting: fadeSetting);
       }
     }
 
@@ -299,11 +307,16 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       await _controller.playlist.addTracksToPlaylist(
         _controller.playlist.queuePlaylistId,
         tracks,
+        fadeSetting: fadeSetting,
       );
     }
 
     if (targetPlaylistId != null) {
-      await _controller.playlist.addTracksToPlaylist(targetPlaylistId, tracks);
+      await _controller.playlist.addTracksToPlaylist(
+        targetPlaylistId,
+        tracks,
+        fadeSetting: fadeSetting,
+      );
     }
   }
 
@@ -334,7 +347,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       animation: _controller,
       builder: (context, _) {
         return DefaultTabController(
-          length: 3,
+          length: 4,
           child: Scaffold(
             appBar: AppBar(
               title: const Text('Audio Visualizer Player Plugin Demo'),
@@ -342,6 +355,7 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
               bottom: const TabBar(
                 tabs: [
                   Tab(icon: Icon(Icons.music_note), text: 'Player'),
+                  Tab(icon: Icon(Icons.tune), text: 'Fade Demo'),
                   Tab(icon: Icon(Icons.shuffle), text: 'Random Lab'),
                   Tab(icon: Icon(Icons.equalizer), text: 'Equalizer'),
                 ],
@@ -387,9 +401,17 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                     ],
                   ),
                 ),
+                // 第二页: 淡入淡出控制演示
+                FadeDemoTab(
+                  controller: _controller,
+                  onLoadMusicPressed: (fadeSetting) =>
+                      _pickAudio(fadeSetting: fadeSetting),
+                  onLoadMusicWithFadePressed: (fadeSetting) =>
+                      _pickAudio(fadeSetting: fadeSetting),
+                ),
                 // 第二页: 随机播放实验台
                 RandomLabTab(key: _randomLabKey, controller: _controller),
-                // 第三页: 均衡器界面
+                // 第四页: 均衡器界面
                 SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
                   child: EqualizerPanel(controller: _controller),

@@ -113,6 +113,7 @@ class PlaylistController extends ChangeNotifier {
     String id, {
     int startIndex = 0,
     bool autoPlay = false,
+    FadeSettings? fadeSetting,
   }) async {
     final playlist = playlistById(id);
     if (playlist == null) return;
@@ -123,6 +124,7 @@ class PlaylistController extends ChangeNotifier {
       await _parent.loadTrack(
         autoPlay: autoPlay,
         reason: PlaybackReason.playlistChanged,
+        fadeSetting: fadeSetting,
       );
       return;
     }
@@ -138,12 +140,21 @@ class PlaylistController extends ChangeNotifier {
         ? null
         : startIndex.clamp(0, _activePlaylistTracks.length - 1).toInt();
 
-    await _reconcile(forceLoad: true, autoPlay: autoPlay, oldTrack: oldTrack);
+    await _reconcile(
+      forceLoad: true,
+      autoPlay: autoPlay,
+      oldTrack: oldTrack,
+      fadeSetting: fadeSetting,
+    );
   }
 
-  Future<void> switchPlaylist(String id) async => setActivePlaylist(id);
+  Future<void> switchPlaylist(String id, {FadeSettings? fadeSetting}) async =>
+      setActivePlaylist(id, fadeSetting: fadeSetting);
 
-  Future<void> addTracks(List<AudioTrack> tracks) async {
+  Future<void> addTracks(
+    List<AudioTrack> tracks, {
+    FadeSettings? fadeSetting,
+  }) async {
     final oldTrack = currentTrack;
     await _ensureDefaultPlaylist();
     _activePlaylistTracks.addAll(tracks);
@@ -152,10 +163,14 @@ class PlaylistController extends ChangeNotifier {
       _currentIndex = 0;
     }
 
-    await _reconcile(oldTrack: oldTrack);
+    await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
   }
 
-  Future<void> addTracksToPlaylist(String id, List<AudioTrack> tracks) async {
+  Future<void> addTracksToPlaylist(
+    String id,
+    List<AudioTrack> tracks, {
+    FadeSettings? fadeSetting,
+  }) async {
     final idx = _playlists.indexWhere((p) => p.id == id);
     if (idx < 0) return;
 
@@ -169,7 +184,7 @@ class PlaylistController extends ChangeNotifier {
       if (oldTrack == null && _activePlaylistTracks.isNotEmpty) {
         _currentIndex = 0;
       }
-      await _reconcile(oldTrack: oldTrack);
+      await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
     } else {
       notifyListeners(); // Metadata in another playlist changed
     }
@@ -178,8 +193,9 @@ class PlaylistController extends ChangeNotifier {
   @internal
   Future<void> updatePlaylistTracks(
     String id,
-    List<AudioTrack> newTracks,
-  ) async {
+    List<AudioTrack> newTracks, {
+    FadeSettings? fadeSetting,
+  }) async {
     final idx = _playlists.indexWhere((p) => p.id == id);
     if (idx < 0) return;
 
@@ -199,13 +215,17 @@ class PlaylistController extends ChangeNotifier {
         _currentIndex = _activePlaylistTracks.isNotEmpty ? 0 : null;
       }
 
-      await _reconcile(oldTrack: oldTrack);
+      await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
     } else {
       notifyListeners();
     }
   }
 
-  Future<void> insertTrack(int index, AudioTrack track) async {
+  Future<void> insertTrack(
+    int index,
+    AudioTrack track, {
+    FadeSettings? fadeSetting,
+  }) async {
     final oldTrack = currentTrack;
     _activePlaylistTracks.insert(index, track);
 
@@ -215,10 +235,13 @@ class PlaylistController extends ChangeNotifier {
       _currentIndex = _currentIndex! + 1;
     }
 
-    await _reconcile(oldTrack: oldTrack);
+    await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
   }
 
-  Future<void> replaceTrack(AudioTrack track) async {
+  Future<void> replaceTrack(
+    AudioTrack track, {
+    FadeSettings? fadeSetting,
+  }) async {
     var changed = false;
 
     for (var i = 0; i < _activePlaylistTracks.length; i++) {
@@ -254,13 +277,17 @@ class PlaylistController extends ChangeNotifier {
         await _parent.loadTrack(
           autoPlay: false,
           reason: PlaybackReason.playlistChanged,
+          fadeSetting: fadeSetting,
         );
       }
       notifyListeners();
     }
   }
 
-  Future<bool> playNext({PlaybackReason reason = PlaybackReason.user}) async {
+  Future<bool> playNext({
+    PlaybackReason reason = PlaybackReason.user,
+    FadeSettings? fadeSetting,
+  }) async {
     final oldTrack = currentTrack;
     final resolution = _resolveAdjacentIndex(next: true);
     if (resolution == null) return false;
@@ -269,12 +296,14 @@ class PlaylistController extends ChangeNotifier {
       oldTrack: oldTrack,
       autoPlay: reason != PlaybackReason.playlistChanged,
       reason: reason,
+      fadeSetting: fadeSetting,
     );
     return true;
   }
 
   Future<bool> playPrevious({
     PlaybackReason reason = PlaybackReason.user,
+    FadeSettings? fadeSetting,
   }) async {
     final oldTrack = currentTrack;
     final resolution = _resolveAdjacentIndex(next: false);
@@ -284,6 +313,7 @@ class PlaylistController extends ChangeNotifier {
           autoPlay: true,
           position: Duration.zero,
           reason: reason,
+          fadeSetting: fadeSetting,
         );
         return true;
       }
@@ -294,11 +324,16 @@ class PlaylistController extends ChangeNotifier {
       oldTrack: oldTrack,
       autoPlay: reason != PlaybackReason.playlistChanged,
       reason: reason,
+      fadeSetting: fadeSetting,
     );
     return true;
   }
 
-  Future<void> moveTrack(int oldIndex, int newIndex) async {
+  Future<void> moveTrack(
+    int oldIndex,
+    int newIndex, {
+    FadeSettings? fadeSetting,
+  }) async {
     if (oldIndex < 0 ||
         oldIndex >= _activePlaylistTracks.length ||
         newIndex < 0 ||
@@ -320,10 +355,10 @@ class PlaylistController extends ChangeNotifier {
       }
     }
 
-    await _reconcile(oldTrack: oldTrack);
+    await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
   }
 
-  Future<void> removeTrackAt(int index) async {
+  Future<void> removeTrackAt(int index, {FadeSettings? fadeSetting}) async {
     if (index < 0 || index >= _activePlaylistTracks.length) return;
     final oldTrack = currentTrack;
     final removedCurrent = _currentIndex == index;
@@ -331,7 +366,7 @@ class PlaylistController extends ChangeNotifier {
     _activePlaylistTracks.removeAt(index);
 
     if (_activePlaylistTracks.isEmpty) {
-      await clear();
+      await clear(fadeSetting: fadeSetting);
       return;
     }
 
@@ -343,16 +378,29 @@ class PlaylistController extends ChangeNotifier {
       }
     }
 
-    await _reconcile(oldTrack: oldTrack);
+    await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
   }
 
-  Future<void> clear() async {
+  Future<void> clear({FadeSettings? fadeSetting}) async {
     final oldTrack = currentTrack;
     _activePlaylistTracks.clear();
     _currentIndex = null;
     _randomManager.setPolicy(null);
 
-    await _reconcile(oldTrack: oldTrack);
+    await _reconcile(oldTrack: oldTrack, fadeSetting: fadeSetting);
+  }
+
+  Future<void> resetPlaybackState() async {
+    _playlists.clear();
+    _activePlaylistId = null;
+    _activePlaylistTracks.clear();
+    _playOrder.clear();
+    _currentIndex = null;
+    _currentOrderCursor = null;
+    _playlistMode = PlaylistMode.queue;
+    _randomManager.setPolicy(null);
+    _randomManager.clearHistory();
+    notifyListeners();
   }
 
   /// Ensures that the default queue playlist exists and is active.
@@ -506,6 +554,7 @@ class PlaylistController extends ChangeNotifier {
     bool autoPlay = false,
     AudioTrack? oldTrack,
     PlaybackReason reason = PlaybackReason.playlistChanged,
+    FadeSettings? fadeSetting,
   }) async {
     _rebuildPlayOrder();
     _reconcileRandom();
@@ -522,7 +571,11 @@ class PlaylistController extends ChangeNotifier {
     }
 
     if (shouldLoad && track != null) {
-      await _parent.loadTrack(autoPlay: autoPlay, reason: reason);
+      await _parent.loadTrack(
+        autoPlay: autoPlay,
+        reason: reason,
+        fadeSetting: fadeSetting,
+      );
     } else if (oldTrack != null && track == null) {
       await _parent.clearPlayback();
     }

@@ -49,29 +49,33 @@ class PlayerController extends ChangeNotifier {
     required bool autoPlay,
     Duration? position,
     required PlaybackReason reason,
+    FadeSettings? fadeSetting,
     required void Function(bool progressing) onStateChanged,
   }) async {
+    final effectiveFadeSettings = fadeSetting ?? _fadeSettings;
     final isAutoTransition = _playerState == PlayerState.completed;
     final switchingTracks = _selectedPath != null && _selectedPath != uri;
     final isActivelyPlaying = _isPlaying && _playerState == PlayerState.playing;
     final shouldFade =
         switchingTracks &&
         !isAutoTransition &&
-        _fadeSettings.fadeOnSwitch &&
-        _fadeSettings.duration > Duration.zero &&
+        effectiveFadeSettings.fadeOnSwitch &&
+        effectiveFadeSettings.duration > Duration.zero &&
         (reason == PlaybackReason.user || (autoPlay && isActivelyPlaying));
 
     PlaybackTransition strategy = const ImmediateTransition();
 
     if (shouldFade) {
       if (isActivelyPlaying &&
-          _fadeSettings.mode == FadeMode.crossfade &&
+          effectiveFadeSettings.mode == FadeMode.crossfade &&
           _parent.engine.supportsCrossfade) {
-        strategy = NativeCrossfadeTransition(duration: _fadeSettings.duration);
+        strategy = NativeCrossfadeTransition(
+          duration: effectiveFadeSettings.duration,
+        );
       } else {
         // Fallback to sequential fade
         strategy = SequentialFadeTransition(
-          duration: _fadeSettings.duration,
+          duration: effectiveFadeSettings.duration,
           targetVolume: _volume,
         );
       }
@@ -140,19 +144,20 @@ class PlayerController extends ChangeNotifier {
     // });
   }
 
-  Future<void> togglePlayPause() async {
+  Future<void> togglePlayPause({FadeSettings? fadeSetting}) async {
     if (_selectedPath == null) return;
     if (_isPlaying) {
-      await pause();
+      await pause(fadeSetting: fadeSetting);
     } else {
-      await play();
+      await play(fadeSetting: fadeSetting);
     }
   }
 
-  Future<void> pause({bool withFade = true}) async {
+  Future<void> pause({bool withFade = true, FadeSettings? fadeSetting}) async {
     try {
       final fadeDuration = _pauseResumeFadeDuration(
         withFade: withFade && _isPlaying,
+        fadeSetting: fadeSetting,
       );
       await _parent.engine.pause(fadeDuration: fadeDuration);
       _lastCommandTime = DateTime.now();
@@ -164,7 +169,7 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> play({bool withFade = true}) async {
+  Future<void> play({bool withFade = true, FadeSettings? fadeSetting}) async {
     if (_selectedPath == null) return;
 
     if (_playerState == PlayerState.completed) {
@@ -174,13 +179,18 @@ class PlayerController extends ChangeNotifier {
 
     try {
       final wasPaused = _playerState == PlayerState.paused;
+      final wasReady = _playerState == PlayerState.ready;
       if (_playerState == PlayerState.completed) {
         await seek(Duration.zero);
       }
 
-      await _parent.engine.play(
-        fadeDuration: _pauseResumeFadeDuration(withFade: withFade && wasPaused),
+      final fadeDuration = _playFadeDuration(
+        withFade: withFade,
+        wasPaused: wasPaused,
+        wasReady: wasReady,
+        fadeSetting: fadeSetting,
       );
+      await _parent.engine.play(fadeDuration: fadeDuration);
       _lastCommandTime = DateTime.now();
       _isPlaying = true;
       _playerState = PlayerState.playing;
@@ -215,10 +225,40 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Duration? _pauseResumeFadeDuration({required bool withFade}) {
-    if (!withFade || !_fadeSettings.fadeOnPauseResume) return null;
-    if (_fadeSettings.duration <= Duration.zero) return null;
-    return _fadeSettings.duration;
+  Duration? _pauseResumeFadeDuration({
+    required bool withFade,
+    FadeSettings? fadeSetting,
+  }) {
+    final effectiveFadeSettings = fadeSetting ?? _fadeSettings;
+    if (!withFade || !effectiveFadeSettings.fadeOnPauseResume) return null;
+    if (effectiveFadeSettings.duration <= Duration.zero) return null;
+    return effectiveFadeSettings.duration;
+  }
+
+  Duration? _playFadeDuration({
+    required bool withFade,
+    required bool wasPaused,
+    required bool wasReady,
+    FadeSettings? fadeSetting,
+  }) {
+    final effectiveFadeSettings = fadeSetting ?? _fadeSettings;
+    if (!withFade || effectiveFadeSettings.duration <= Duration.zero) {
+      return null;
+    }
+
+    if (wasPaused) {
+      return effectiveFadeSettings.fadeOnPauseResume
+          ? effectiveFadeSettings.duration
+          : null;
+    }
+
+    if (wasReady) {
+      return effectiveFadeSettings.fadeOnSwitch
+          ? effectiveFadeSettings.duration
+          : null;
+    }
+
+    return null;
   }
 
   @internal

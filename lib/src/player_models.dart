@@ -16,6 +16,7 @@ abstract class AudioVisualizerParent {
     required bool autoPlay,
     Duration? position,
     PlaybackReason reason,
+    FadeSettings? fadeSetting,
   });
 
   /// Called when playback should be cleared.
