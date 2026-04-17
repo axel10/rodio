@@ -596,7 +596,7 @@ pub(super) fn snapshot_playback_state() -> PlaybackState {
         })
 }
 
-pub(super) fn snapshot_loaded_path() -> Option<String> {
+pub(super) fn _snapshot_loaded_path() -> Option<String> {
     controller()
         .lock()
         .ok()

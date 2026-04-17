@@ -418,8 +418,14 @@ class AudioCoreController extends ChangeNotifier
     }
 
     return waveform
-        .map((value) => (value / maxValue).clamp(0.0, 1.0))
+        .map(
+          (value) => _roundWaveformValue((value / maxValue).clamp(0.0, 1.0)),
+        )
         .toList(growable: false);
+  }
+
+  double _roundWaveformValue(double value) {
+    return (value * 100).roundToDouble() / 100.0;
   }
 
   /// Returns decoded PCM samples for the current track or a specific file path.

@@ -82,7 +82,6 @@ fn get_raw_audio_fingerprint(path: &Path) -> anyhow::Result<Vec<u32>> {
                     let remaining = target_samples.saturating_sub(total_samples_processed);
                     if samples.len() >= remaining {
                         printer.consume(&samples[..remaining]);
-                        total_samples_processed += remaining;
                         break;
                     } else {
                         printer.consume(samples);

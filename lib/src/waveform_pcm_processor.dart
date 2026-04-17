@@ -10,6 +10,7 @@ class WaveformPcmProcessor {
   const WaveformPcmProcessor();
 
   static const int _rmsWindowsPerChunk = 8;
+  static const double _waveformPrecisionScale = 100.0;
 
   List<double> process(
     Float32List pcm, {
@@ -25,13 +26,15 @@ class WaveformPcmProcessor {
       return List<double>.filled(expectedChunks, 0.0);
     }
 
-    return _reduceToChunks(mono, expectedChunks);
+    return _reduceToChunks(mono, expectedChunks)
+        .map(_roundToWaveformPrecision)
+        .toList(growable: false);
   }
 
   List<double> _toMonoSamples(Float32List pcm, {required int channels}) {
     final safeChannels = channels <= 0 ? 1 : channels;
     if (safeChannels == 1) {
-      return pcm.map((sample) => sample.toDouble()).toList(growable: false);
+      return pcm.toList(growable: false);
     }
 
     final frameCount = pcm.length ~/ safeChannels;
@@ -79,6 +82,11 @@ class WaveformPcmProcessor {
     }
 
     return out;
+  }
+
+  double _roundToWaveformPrecision(double value) {
+    return (value * _waveformPrecisionScale).roundToDouble() /
+        _waveformPrecisionScale;
   }
 
   double _computeRms(List<double> samples, int start, int end) {
