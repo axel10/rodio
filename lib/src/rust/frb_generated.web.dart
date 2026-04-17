@@ -11,7 +11,6 @@ import 'api/simple/audio_fingerprint.dart';
 import 'api/simple/controller.dart';
 import 'api/simple/equalizer.dart';
 import 'api/simple/metadata.dart';
-import 'api/simple/waveform.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';

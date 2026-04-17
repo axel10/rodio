@@ -3,7 +3,6 @@ pub mod controller;
 pub mod equalizer;
 pub mod fft;
 pub mod metadata;
-pub mod waveform;
 
 use crate::frb_generated::StreamSink;
 use std::thread;
@@ -20,7 +19,6 @@ pub use controller::{
 pub use metadata::{
     get_track_metadata, remove_all_tags, update_track_metadata, TrackMetadataUpdate, TrackPicture,
 };
-pub use waveform::{extract_loaded_waveform, extract_waveform_for_path, WaveformChunk};
 
 const PLAYBACK_STATE_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 
