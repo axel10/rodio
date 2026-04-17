@@ -209,6 +209,15 @@ impl PlayerController {
         self.cached_sample_rate = 0;
     }
 
+    fn decode_pcm_from_path(path: &str) -> Result<(Vec<f32>, usize, u32), String> {
+        let file = File::open(path).map_err(|e| format!("open file failed: {} - {}", path, e))?;
+        let source = Decoder::try_from(file).map_err(|e| format!("decode failed: {e}"))?;
+        let channels = source.channels().get() as usize;
+        let sample_rate = source.sample_rate().get();
+        let pcm: Vec<f32> = source.collect();
+        Ok((pcm, channels, sample_rate))
+    }
+
     fn warm_waveform_cache_for_public_path(&mut self) {
         let Some(path) = self.public_path().map(str::to_string) else {
             return;
@@ -221,18 +230,13 @@ impl PlayerController {
         self.invalidate_waveform_cache();
 
         thread::spawn(move || {
-            if let Ok(file) = File::open(&path) {
-                if let Ok(source) = Decoder::try_from(file) {
-                    let channels = source.channels().get() as usize;
-                    let sample_rate = source.sample_rate().get();
-                    let pcm: Vec<f32> = source.collect();
-                    if let Ok(mut c) = controller().lock() {
-                        if c.public_path() == Some(path.as_str()) {
-                            c.cached_path = Some(path.clone());
-                            c.cached_pcm = Some(Arc::new(pcm));
-                            c.cached_channels = channels;
-                            c.cached_sample_rate = sample_rate;
-                        }
+            if let Ok((pcm, channels, sample_rate)) = Self::decode_pcm_from_path(&path) {
+                if let Ok(mut c) = controller().lock() {
+                    if c.public_path() == Some(path.as_str()) {
+                        c.cached_path = Some(path.clone());
+                        c.cached_pcm = Some(Arc::new(pcm));
+                        c.cached_channels = channels;
+                        c.cached_sample_rate = sample_rate;
                     }
                 }
             }
@@ -608,6 +612,66 @@ pub(super) fn snapshot_loaded_path() -> Option<String> {
         .lock()
         .ok()
         .and_then(|c| c.public_path().map(str::to_string))
+}
+
+pub fn get_audio_pcm(path: Option<String>) -> Result<Vec<f32>, String> {
+    let (target_path, verify_loaded_path) = {
+        let c = controller()
+            .lock()
+            .map_err(|_| "player lock poisoned".to_string())?;
+
+        match path {
+            Some(ref explicit_path) if explicit_path.trim().is_empty() => {
+                return Err("path is empty".to_string());
+            }
+            Some(explicit_path) => {
+                if c.cached_path.as_deref() == Some(explicit_path.as_str()) {
+                    if let Some(cached) = c.cached_pcm.as_ref() {
+                        return Ok((**cached).clone());
+                    }
+                }
+                (explicit_path, false)
+            }
+            None => {
+                let Some(public_path) = c.public_path().map(str::to_string) else {
+                    return Err("no audio is currently loaded".to_string());
+                };
+
+                if c.cached_path.as_deref() == Some(public_path.as_str()) {
+                    if let Some(cached) = c.cached_pcm.as_ref() {
+                        return Ok((**cached).clone());
+                    }
+                }
+
+                (public_path, true)
+            }
+        }
+    };
+
+    let (pcm, channels, sample_rate) = PlayerController::decode_pcm_from_path(&target_path)?;
+
+    if verify_loaded_path {
+        let current_loaded_path = controller()
+            .lock()
+            .map_err(|_| "player lock poisoned".to_string())?
+            .public_path()
+            .map(str::to_string);
+
+        if current_loaded_path.as_deref() != Some(target_path.as_str()) {
+            return Err("loaded audio changed during PCM extraction, please retry".to_string());
+        }
+    }
+
+    if let Ok(mut c) = controller().lock() {
+        if c.public_path() == Some(target_path.as_str()) {
+            c.cached_path = Some(target_path);
+            c.cached_pcm = Some(Arc::new(pcm.clone()));
+            c.cached_channels = channels;
+            c.cached_sample_rate = sample_rate;
+        }
+    }
+
+    Ok(pcm)
 }
 
 fn drive_crossfade(generation: u64, duration: Duration) {

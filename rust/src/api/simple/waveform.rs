@@ -52,9 +52,8 @@ fn normalize_waveform_levels(waveform: &mut [f32]) {
     }
 
     positive_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let scale_index =
-        ((positive_values.len() as f32 * DISPLAY_SCALE_QUANTILE).floor() as usize)
-            .min(positive_values.len().saturating_sub(1));
+    let scale_index = ((positive_values.len() as f32 * DISPLAY_SCALE_QUANTILE).floor() as usize)
+        .min(positive_values.len().saturating_sub(1));
     let scale = positive_values[scale_index].max(EPSILON);
 
     for value in waveform.iter_mut() {
@@ -231,9 +230,10 @@ fn extract_waveform_from_path(
             buf.copy_interleaved_ref(decoded);
             let energy = compute_packet_envelope(buf.samples(), sample_stride);
 
-            if let (Some(start_ts), Some(previous_energy)) =
-                (previous_sampled_packet_ts.take(), previous_sampled_energy.take())
-            {
+            if let (Some(start_ts), Some(previous_energy)) = (
+                previous_sampled_packet_ts.take(),
+                previous_sampled_energy.take(),
+            ) {
                 let span_end = packet_ts.max(start_ts.saturating_add(1));
                 packet_energies.push((start_ts, span_end, previous_energy));
             }
@@ -243,9 +243,10 @@ fn extract_waveform_from_path(
         }
     }
 
-    if let (Some(start_ts), Some(energy)) =
-        (previous_sampled_packet_ts.take(), previous_sampled_energy.take())
-    {
+    if let (Some(start_ts), Some(energy)) = (
+        previous_sampled_packet_ts.take(),
+        previous_sampled_energy.take(),
+    ) {
         let span_end = max_packet_end_ts.max(start_ts.saturating_add(1));
         packet_energies.push((start_ts, span_end, energy));
     }

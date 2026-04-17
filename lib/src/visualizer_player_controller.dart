@@ -20,6 +20,7 @@ import 'audio_engine/rust_audio_engine.dart';
 import 'android_track_metadata.dart';
 import 'android_media_library.dart';
 import 'track_metadata.dart';
+import 'rust/api/simple_api.dart' as rust;
 
 export 'player_controller.dart';
 export 'playlist_controller.dart';
@@ -410,6 +411,28 @@ class AudioCoreController extends ChangeNotifier
       player.setError('Waveform failed: $e');
       return const [];
     }
+  }
+
+  /// Returns decoded PCM samples for the current track or a specific file path.
+  ///
+  /// If [path] is omitted, this uses the currently loaded track.
+  /// This API is available on the Rust-backed desktop platforms.
+  Future<Float32List> getAudioPcm({String? path}) async {
+    if (Platform.isAndroid) {
+      throw UnsupportedError(
+        'getAudioPcm is only available on the Rust-backed desktop platforms.',
+      );
+    }
+
+    if (!_initialized) {
+      await initialize();
+    }
+
+    if (!_initialized) {
+      throw StateError('AudioCoreController is not initialized.');
+    }
+
+    return rust.getAudioPcm(path: path);
   }
 
   /// Requests Android audio library permission through the platform bridge.

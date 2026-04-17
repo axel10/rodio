@@ -335,7 +335,10 @@ fn read_track_metadata_with_lofty(path: &str) -> TrackMetadataUpdate {
         return TrackMetadataUpdate::default();
     };
 
-    let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) else {
+    let Some(tag) = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+    else {
         return TrackMetadataUpdate::default();
     };
 
@@ -348,9 +351,10 @@ fn read_track_metadata_with_lofty(path: &str) -> TrackMetadataUpdate {
     let disc_number = tag.disk().map(|v| v as i32);
     let date = tag.date().map(|v| v.to_string());
     let year = tag.date().map(|v| i32::from(v.year));
-    let comment = tag.comment().map(|v| v.to_string()).or_else(|| {
-        first_tag_value(tag, ItemKey::Comment)
-    });
+    let comment = tag
+        .comment()
+        .map(|v| v.to_string())
+        .or_else(|| first_tag_value(tag, ItemKey::Comment));
     let lyrics = first_tag_value(tag, ItemKey::UnsyncLyrics)
         .or_else(|| first_tag_value(tag, ItemKey::Lyrics));
     let composer = first_tag_value(tag, ItemKey::Composer);

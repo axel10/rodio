@@ -6,7 +6,7 @@
 import '../../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `extract_waveform_from_path`, `fold_packet_peaks_to_chunks`
+// These functions are ignored because they are not marked as `pub`: `chunk_bounds`, `compute_packet_envelope`, `extract_waveform_from_path`, `fold_packet_energy_to_chunks`, `normalize_waveform_levels`, `time_to_chunk`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `WaveformChunk`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
