@@ -65,6 +65,12 @@ abstract class AudioEngine {
   Future<void> prepareForFileWrite();
   Future<void> finishFileWrite();
 
+  // Apple security-scoped access persistence
+  Future<bool> registerPersistentAccess(String path);
+  Future<void> forgetPersistentAccess(String path);
+  Future<bool> hasPersistentAccess(String path);
+  Future<List<String>> listPersistentAccessPaths();
+
   // Native metadata updates
   Future<bool> updateTrackMetadata({
     required String path,

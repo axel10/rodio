@@ -19,6 +19,7 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
   String? _currentPath;
   double _currentVolume = 1.0;
   EqualizerConfig? _lastConfig;
+  final Set<String> _preparedWritePaths = <String>{};
 
   @override
   Stream<AudioStatus> get statusStream => _statusController.stream;
@@ -59,17 +60,20 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
   Future<void> stop() async {
     await _channel.invokeMethod('dispose');
     _currentPath = null;
+    _preparedWritePaths.clear();
   }
 
   @override
   Future<void> dispose() async {
     await _statusController.close();
     await _channel.invokeMethod('dispose');
+    _preparedWritePaths.clear();
   }
 
   @override
   Future<void> load(String path) async {
     _currentPath = path;
+    _preparedWritePaths.clear();
     await _channel.invokeMethod('load', <String, Object?>{
       'url': path,
       'playerId': 'main',
@@ -231,27 +235,87 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
   }
 
   @override
-  Future<void> prepareForFileWrite() => _channel.invokeMethod(
-    'prepareForFileWrite',
-    <String, Object?>{'playerId': 'main'},
-  );
+  Future<void> prepareForFileWrite() async {
+    final targetPath = _currentPath?.trim();
+    if (targetPath != null && targetPath.isNotEmpty) {
+      _preparedWritePaths.add(_normalizePath(targetPath));
+    }
+    try {
+      await _channel.invokeMethod('prepareForFileWrite', <String, Object?>{
+        'playerId': 'main',
+      });
+    } catch (_) {
+      if (targetPath != null && targetPath.isNotEmpty) {
+        _preparedWritePaths.remove(_normalizePath(targetPath));
+      }
+      rethrow;
+    }
+  }
 
   @override
-  Future<void> finishFileWrite() => _channel.invokeMethod(
-    'finishFileWrite',
-    <String, Object?>{'playerId': 'main'},
-  );
+  Future<void> finishFileWrite() async {
+    final targetPath = _currentPath?.trim();
+    if (targetPath != null && targetPath.isNotEmpty) {
+      _preparedWritePaths.remove(_normalizePath(targetPath));
+    }
+    await _channel.invokeMethod('finishFileWrite', <String, Object?>{
+      'playerId': 'main',
+    });
+  }
+
+  @override
+  Future<bool> registerPersistentAccess(String path) async {
+    final normalizedPath = _normalizePath(path);
+    final bool? result = await _channel.invokeMethod<bool>(
+      'registerPersistentAccess',
+      <String, Object?>{'path': normalizedPath},
+    );
+    return result ?? false;
+  }
+
+  @override
+  Future<void> forgetPersistentAccess(String path) async {
+    final normalizedPath = _normalizePath(path);
+    await _channel.invokeMethod('forgetPersistentAccess', <String, Object?>{
+      'path': normalizedPath,
+    });
+  }
+
+  @override
+  Future<bool> hasPersistentAccess(String path) async {
+    final normalizedPath = _normalizePath(path);
+    final bool? result = await _channel.invokeMethod<bool>(
+      'hasPersistentAccess',
+      <String, Object?>{'path': normalizedPath},
+    );
+    return result ?? false;
+  }
+
+  @override
+  Future<List<String>> listPersistentAccessPaths() async {
+    final List<dynamic>? result = await _channel.invokeMethod(
+      'listPersistentAccessPaths',
+    );
+    if (result == null) return const <String>[];
+    return result
+        .map((entry) => entry.toString())
+        .where((entry) => entry.trim().isNotEmpty)
+        .toList(growable: false);
+  }
 
   @override
   Future<bool> updateTrackMetadata({
     required String path,
     required Map<String, Object?> metadata,
   }) async {
-    await rust.updateTrackMetadata(
-      path: path,
-      metadata: trackMetadataUpdateFromMap(metadata),
-    );
-    return true;
+    final targetPath = _normalizePath(path);
+    return _withAppleFileWriteAccess(targetPath, () async {
+      await rust.updateTrackMetadata(
+        path: targetPath,
+        metadata: trackMetadataUpdateFromMap(metadata),
+      );
+      return true;
+    });
   }
 
   @override
@@ -259,7 +323,8 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
     required String path,
     String? fallbackMediaUri,
   }) async {
-    final metadata = await rust.getTrackMetadata(path: path);
+    final targetPath = _normalizePath(path);
+    final metadata = await rust.getTrackMetadata(path: targetPath);
     return trackMetadataFromRust(metadata);
   }
 
@@ -269,7 +334,10 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
     if (targetPath == null || targetPath.isEmpty) {
       throw ArgumentError.value(path, 'path', 'Path is required here.');
     }
-    await rust.removeAllTags(path: targetPath);
+    final normalizedPath = _normalizePath(targetPath);
+    await _withAppleFileWriteAccess(normalizedPath, () async {
+      await rust.removeAllTags(path: normalizedPath);
+    });
   }
 
   String _resolvePath(String? path) {
@@ -282,6 +350,43 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
       return current;
     }
     throw StateError('A path is required for PCM extraction.');
+  }
+
+  String _normalizePath(String path) {
+    final targetPath = path.trim();
+    if (targetPath.startsWith('file://')) {
+      return Uri.parse(targetPath).toFilePath();
+    }
+    return targetPath;
+  }
+
+  String? _normalizeNullablePath(String? path) {
+    final targetPath = path?.trim();
+    if (targetPath == null || targetPath.isEmpty) return null;
+    return _normalizePath(targetPath);
+  }
+
+  Future<T> _withAppleFileWriteAccess<T>(
+    String path,
+    Future<T> Function() action,
+  ) async {
+    if (_preparedWritePaths.contains(path)) {
+      return await action();
+    }
+
+    final arguments = <String, Object?>{
+      'playerId': 'main',
+      if (_normalizeNullablePath(_currentPath) != path) 'path': path,
+    };
+
+    _preparedWritePaths.add(path);
+    try {
+      await _channel.invokeMethod('prepareForFileWrite', arguments);
+      return await action();
+    } finally {
+      await _channel.invokeMethod('finishFileWrite', arguments);
+      _preparedWritePaths.remove(path);
+    }
   }
 
   EqualizerConfig _defaultEqualizerConfig() {

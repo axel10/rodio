@@ -126,6 +126,18 @@ class RustAudioEngine with PcmWaveformSupport implements AudioEngine {
   Future<void> finishFileWrite() => rust.finishFileWrite();
 
   @override
+  Future<bool> registerPersistentAccess(String path) async => false;
+
+  @override
+  Future<void> forgetPersistentAccess(String path) async {}
+
+  @override
+  Future<bool> hasPersistentAccess(String path) async => false;
+
+  @override
+  Future<List<String>> listPersistentAccessPaths() async => const <String>[];
+
+  @override
   Future<bool> updateTrackMetadata({
     required String path,
     required Map<String, Object?> metadata,

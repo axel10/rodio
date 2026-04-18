@@ -453,6 +453,36 @@ class AudioCoreController extends ChangeNotifier
     return _engine.getAudioPcm(path: path, sampleStride: sampleStride);
   }
 
+  /// Registers a persistent Apple security-scoped bookmark for [path].
+  ///
+  /// On Apple platforms, this lets the app keep using an external file after
+  /// the current session ends, as long as the file was selected through the
+  /// system file picker at least once.
+  Future<bool> registerPersistentAccess({String? path}) async {
+    final targetPath = _resolvePersistentAccessPath(path);
+    if (targetPath == null) return false;
+    return _engine.registerPersistentAccess(targetPath);
+  }
+
+  /// Forgets a previously saved persistent Apple security-scoped bookmark.
+  Future<void> forgetPersistentAccess({String? path}) async {
+    final targetPath = _resolvePersistentAccessPath(path);
+    if (targetPath == null) return;
+    await _engine.forgetPersistentAccess(targetPath);
+  }
+
+  /// Returns whether the controller has a stored persistent access entry.
+  Future<bool> hasPersistentAccess({String? path}) async {
+    final targetPath = _resolvePersistentAccessPath(path);
+    if (targetPath == null) return false;
+    return _engine.hasPersistentAccess(targetPath);
+  }
+
+  /// Returns all stored persistent access paths known to the Apple backend.
+  Future<List<String>> listPersistentAccessPaths() async {
+    return _engine.listPersistentAccessPaths();
+  }
+
   /// Requests Android audio library permission through the platform bridge.
   Future<bool> ensureAndroidMediaLibraryPermission() async {
     if (!Platform.isAndroid) return false;
@@ -579,6 +609,25 @@ class AudioCoreController extends ChangeNotifier
 
     final resolvedTrackPath = _resolveTrackPath(currentTrack).trim();
     return resolvedTrackPath.isEmpty ? null : resolvedTrackPath;
+  }
+
+  String? _resolvePersistentAccessPath(String? path) {
+    final explicitPath = path?.trim();
+    if (explicitPath != null && explicitPath.isNotEmpty) {
+      return explicitPath;
+    }
+
+    final currentPath = player.currentPath?.trim();
+    if (currentPath != null && currentPath.isNotEmpty) {
+      return currentPath;
+    }
+
+    final currentTrack = playlist.currentTrack;
+    if (currentTrack == null) {
+      return null;
+    }
+
+    return _resolveTrackPath(currentTrack).trim();
   }
 
   Future<bool> _updateMetadataAtPath({

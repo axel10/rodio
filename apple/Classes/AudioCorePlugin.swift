@@ -8,8 +8,14 @@ import Flutter
 #endif
 
 public final class AudioCorePlugin: NSObject, FlutterPlugin {
-  private let engine = AppleAudioEngine()
+  private let fileAccess = SecurityScopedFileAccessCoordinator()
+  private let engine: AppleAudioEngine
   private var channel: FlutterMethodChannel?
+
+  public override init() {
+    self.engine = AppleAudioEngine(fileAccess: fileAccess)
+    super.init()
+  }
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
@@ -137,21 +143,44 @@ public final class AudioCorePlugin: NSObject, FlutterPlugin {
         result(FlutterError(code: "PCM_FAILED", message: error.localizedDescription, details: nil))
       }
     case "prepareForFileWrite":
+      let path = Self.readString(call.arguments, key: "path")
       do {
-        try engine.prepareForFileWrite()
+        try engine.prepareForFileWrite(path: path)
         sendPlayerState()
         result(nil)
       } catch {
         result(FlutterError(code: "PREPARE_FAILED", message: error.localizedDescription, details: nil))
       }
     case "finishFileWrite":
+      let path = Self.readString(call.arguments, key: "path")
       do {
-        try engine.finishFileWrite()
+        try engine.finishFileWrite(path: path)
         sendPlayerState()
         result(nil)
       } catch {
         result(FlutterError(code: "FINISH_FAILED", message: error.localizedDescription, details: nil))
       }
+    case "registerPersistentAccess":
+      guard let path = Self.readString(call.arguments, key: "path") else {
+        result(false)
+        return
+      }
+      result(engine.registerPersistentAccess(path: path))
+    case "forgetPersistentAccess":
+      guard let path = Self.readString(call.arguments, key: "path") else {
+        result(nil)
+        return
+      }
+      engine.forgetPersistentAccess(path: path)
+      result(nil)
+    case "hasPersistentAccess":
+      guard let path = Self.readString(call.arguments, key: "path") else {
+        result(false)
+        return
+      }
+      result(engine.hasPersistentAccess(path: path))
+    case "listPersistentAccessPaths":
+      result(engine.listPersistentAccessPaths())
     case "dispose":
       engine.dispose()
       sendPlayerState()
@@ -183,6 +212,13 @@ public final class AudioCorePlugin: NSObject, FlutterPlugin {
     if let value = map[key] as? Int64 { return Double(value) }
     return nil
   }
+
+  private static func readString(_ arguments: Any?, key: String) -> String? {
+    guard let map = arguments as? [String: Any] else { return nil }
+    guard let value = map[key] as? String else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
 }
 
 private final class AppleAudioEngine {
@@ -195,19 +231,31 @@ private final class AppleAudioEngine {
 
   private let fftSize = 1024
   private let fftBinCount = 512
+  private let fileAccess: SecurityScopedFileAccessCoordinator
   private var player: AVAudioPlayer?
   private var currentURL: URL?
   private var sampleRate: Double = 44_100
   private var latestVolume: Double = 1.0
   private var pendingEdit: PendingEdit?
   private var fadeTimer: Timer?
+  private var preparedAccessPaths = Set<String>()
+
+  init(fileAccess: SecurityScopedFileAccessCoordinator) {
+    self.fileAccess = fileAccess
+  }
 
   func ensureReady() {
     // The native engine is lazy; no-op here keeps the channel contract simple.
   }
 
   func load(path: String) throws {
-    let url = try resolveURL(path)
+    if let currentURL {
+      fileAccess.releaseAccess(for: currentURL)
+    }
+    player?.stop()
+    player = nil
+
+    let url = try fileAccess.acquireAccess(for: path)
     let audioPlayer = try AVAudioPlayer(contentsOf: url)
     audioPlayer.numberOfLoops = 0
     audioPlayer.prepareToPlay()
@@ -217,6 +265,7 @@ private final class AppleAudioEngine {
     sampleRate = file.processingFormat.sampleRate
     currentURL = url
     player = audioPlayer
+    preparedAccessPaths.remove(url.path)
   }
 
   func crossfade(path: String, durationMs: Int) throws {
@@ -306,33 +355,53 @@ private final class AppleAudioEngine {
   }
 
   func getAudioPcm(path: String, sampleStride: Int) throws -> [Float] {
-    let url = try resolveURL(path)
-    return try readInterleavedPCM(url: url, sampleStride: sampleStride)
+    return try fileAccess.withTemporaryAccess(for: path) { url in
+      try readInterleavedPCM(url: url, sampleStride: sampleStride)
+    }
   }
 
   func getAudioPcmChannelCount(path: String) throws -> Int {
-    let url = try resolveURL(path)
-    let file = try AVAudioFile(forReading: url)
-    return Int(file.processingFormat.channelCount)
+    try fileAccess.withTemporaryAccess(for: path) { url in
+      let file = try AVAudioFile(forReading: url)
+      return Int(file.processingFormat.channelCount)
+    }
   }
 
   func getFingerprintPcm(path: String, maxDurationMs: Int) throws -> [String: Any] {
-    let url = try resolveURL(path)
-    let file = try AVAudioFile(forReading: url)
-    let format = file.processingFormat
-    return [
-      "samples": try readInterleavedPCM(
-        url: url,
-        sampleStride: 0,
-        maxDurationMs: maxDurationMs
-      ),
-      "sampleRate": Int(format.sampleRate.rounded()),
-      "channels": Int(format.channelCount),
-    ]
+    try fileAccess.withTemporaryAccess(for: path) { url in
+      let file = try AVAudioFile(forReading: url)
+      let format = file.processingFormat
+      return [
+        "samples": try readInterleavedPCM(
+          url: url,
+          sampleStride: 0,
+          maxDurationMs: maxDurationMs
+        ),
+        "sampleRate": Int(format.sampleRate.rounded()),
+        "channels": Int(format.channelCount),
+      ]
+    }
   }
 
-  func prepareForFileWrite() throws {
+  func prepareForFileWrite(path: String? = nil) throws {
+    if let path {
+      let normalizedPath = normalizedFilePath(path)
+      if preparedAccessPaths.contains(normalizedPath) {
+        return
+      }
+
+      if currentURL?.path != normalizedPath {
+        _ = try fileAccess.acquireAccess(for: normalizedPath)
+        preparedAccessPaths.insert(normalizedPath)
+        return
+      }
+    }
+
     guard let path = currentURL?.path else { return }
+    if preparedAccessPaths.contains(path) {
+      return
+    }
+
     let wasPlaying = player?.isPlaying ?? false
     let positionMs = getCurrentPositionMs()
     let volume = latestVolume
@@ -342,11 +411,22 @@ private final class AppleAudioEngine {
       wasPlaying: wasPlaying,
       volume: volume
     )
+    _ = try fileAccess.acquireAccess(for: path)
     player?.stop()
     player = nil
+    preparedAccessPaths.insert(path)
   }
 
-  func finishFileWrite() throws {
+  func finishFileWrite(path: String? = nil) throws {
+    if let path {
+      let normalizedPath = normalizedFilePath(path)
+      if currentURL?.path != normalizedPath {
+        fileAccess.releaseAccess(for: normalizedPath)
+        preparedAccessPaths.remove(normalizedPath)
+        return
+      }
+    }
+
     guard let pendingEdit else { return }
     try load(path: pendingEdit.path)
     try seek(positionMs: pendingEdit.positionMs)
@@ -355,12 +435,32 @@ private final class AppleAudioEngine {
       try play(fadeDurationMs: 0, targetVolume: pendingEdit.volume)
     }
     self.pendingEdit = nil
+    preparedAccessPaths.remove(pendingEdit.path)
+    fileAccess.releaseAccess(for: pendingEdit.path)
+  }
+
+  func registerPersistentAccess(path: String) -> Bool {
+    fileAccess.registerPersistentAccess(for: path)
+  }
+
+  func forgetPersistentAccess(path: String) {
+    fileAccess.forgetPersistentAccess(for: path)
+  }
+
+  func hasPersistentAccess(path: String) -> Bool {
+    fileAccess.hasPersistentAccess(for: path)
+  }
+
+  func listPersistentAccessPaths() -> [String] {
+    fileAccess.listPersistentAccessPaths()
   }
 
   func dispose() {
     fadeTimer?.invalidate()
     fadeTimer = nil
     pendingEdit = nil
+    preparedAccessPaths.removeAll()
+    fileAccess.releaseAllAccess()
     player?.stop()
     player = nil
     currentURL = nil
@@ -380,22 +480,12 @@ private final class AppleAudioEngine {
     return payload
   }
 
-  private func resolveURL(_ path: String) throws -> URL {
+  private func normalizedFilePath(_ path: String) -> String {
     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-      throw NSError(
-        domain: "AudioCore",
-        code: 3,
-        userInfo: [NSLocalizedDescriptionKey: "path is empty"]
-      )
-    }
-    if let url = URL(string: trimmed), url.isFileURL {
-      return url
-    }
     if trimmed.hasPrefix("file://"), let url = URL(string: trimmed) {
-      return url
+      return url.standardizedFileURL.resolvingSymlinksInPath().path
     }
-    return URL(fileURLWithPath: trimmed)
+    return URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath().path
   }
 
   private func readInterleavedPCM(
