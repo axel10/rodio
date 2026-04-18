@@ -58,6 +58,13 @@ class AndroidAudioEngine implements AudioEngine {
   }
 
   @override
+  Future<void> stop() async {
+    _pendingEdit = null;
+    await _channel.invokeMethod('dispose', {'playerId': 'main'});
+    await _channel.invokeMethod('dispose', {'playerId': 'crossfade'});
+  }
+
+  @override
   Future<void> load(String path) async {
     _currentPath = path;
     await _channel.invokeMethod('load', {
@@ -155,6 +162,16 @@ class AndroidAudioEngine implements AudioEngine {
     } catch (e) {
       return [];
     }
+  }
+
+  @override
+  Future<Float32List> getAudioPcm({String? path, int sampleStride = 0}) {
+    throw UnsupportedError('PCM extraction is not available on Android.');
+  }
+
+  @override
+  Future<int> getAudioPcmChannelCount({String? path}) {
+    throw UnsupportedError('PCM extraction is not available on Android.');
   }
 
   @override
@@ -295,12 +312,12 @@ class AndroidAudioEngine implements AudioEngine {
     String? fallbackMediaUri,
   }) async {
     try {
-      final Map<dynamic, dynamic>? result =
-          await _channel.invokeMethod<Map<dynamic, dynamic>>('getTrackMetadata', {
-        'path': path,
-        if (fallbackMediaUri != null && fallbackMediaUri.trim().isNotEmpty)
-          'fallbackMediaUri': fallbackMediaUri.trim(),
-      });
+      final Map<dynamic, dynamic>? result = await _channel
+          .invokeMethod<Map<dynamic, dynamic>>('getTrackMetadata', {
+            'path': path,
+            if (fallbackMediaUri != null && fallbackMediaUri.trim().isNotEmpty)
+              'fallbackMediaUri': fallbackMediaUri.trim(),
+          });
       return TrackMetadata.fromMap(
         result?.cast<String, Object?>() ?? <String, Object?>{},
       );

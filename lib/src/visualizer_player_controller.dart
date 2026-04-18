@@ -15,12 +15,12 @@ import 'fft_processor.dart';
 import 'player_state_snapshot.dart';
 import 'equalizer_controller.dart';
 import 'audio_engine/audio_engine_interface.dart';
+import 'audio_engine/apple_audio_engine.dart';
 import 'audio_engine/android_audio_engine.dart';
 import 'audio_engine/rust_audio_engine.dart';
 import 'android_track_metadata.dart';
 import 'android_media_library.dart';
 import 'track_metadata.dart';
-import 'rust/api/simple_api.dart' as rust;
 
 export 'player_controller.dart';
 export 'playlist_controller.dart';
@@ -63,6 +63,8 @@ class AudioCoreController extends ChangeNotifier
   }) {
     if (Platform.isAndroid) {
       _engine = AndroidAudioEngine();
+    } else if (Platform.isIOS || Platform.isMacOS) {
+      _engine = AppleAudioEngine();
     } else {
       _engine = RustAudioEngine();
     }
@@ -110,9 +112,15 @@ class AudioCoreController extends ChangeNotifier
   StreamSubscription<AudioStatus>? _playbackStateSubscription;
 
   bool get isSupported =>
-      Platform.isAndroid || Platform.isLinux || Platform.isWindows;
+      Platform.isAndroid ||
+      Platform.isIOS ||
+      Platform.isMacOS ||
+      Platform.isLinux ||
+      Platform.isWindows;
   bool get isInitialized => _initialized;
   EqualizerConfig get equalizerConfig => equalizer.config;
+  bool get _usesRustPlaybackBackend => Platform.isLinux || Platform.isWindows;
+  bool get _usesRustMetadataBackend => !Platform.isAndroid;
 
   /// Returns the next track in the current playlist sequence.
   AudioTrack? get nextTrack => playlist.nextTrack;
@@ -148,12 +156,14 @@ class AudioCoreController extends ChangeNotifier
     if (_initialized) return;
     if (!isSupported) {
       debugPrint('AudioCoreController: NOT SUPPORTED');
-      player.setError('Only Android, Linux, and Windows are supported.');
+      player.setError(
+        'Only Android, iOS, macOS, Linux, and Windows are supported.',
+      );
       return;
     }
     debugPrint('AudioCoreController: isSupported = true');
 
-    if (!Platform.isAndroid && !_rustLibInitialized) {
+    if (_usesRustMetadataBackend && !_rustLibInitialized) {
       try {
         debugPrint('AudioCoreController: Initializing RustLib');
         await RustLib.init();
@@ -173,9 +183,8 @@ class AudioCoreController extends ChangeNotifier
     // Apply initial fade settings now that RustLib is ready
     player.setFadeSettings(_initialFadeSettings);
 
-    // Initialize the Rust audio engine (starts device monitoring thread)
     try {
-      if (!Platform.isAndroid) {
+      if (_usesRustPlaybackBackend) {
         debugPrint('AudioCoreController: Initializing Rust App engine');
         await initApp();
       }
@@ -237,7 +246,7 @@ class AudioCoreController extends ChangeNotifier
     _analysisTick?.cancel();
     _renderTick?.cancel();
     _playbackStateSubscription?.cancel();
-    unawaited(disposeAudio());
+    unawaited(_engine.dispose());
     visualizer.dispose();
     player.dispose();
     playlist.dispose();
@@ -286,13 +295,14 @@ class AudioCoreController extends ChangeNotifier
 
   @override
   Future<void> clearPlayback() async {
+    await _engine.stop();
     player.stopPlayback();
     visualizer.resetState();
   }
 
   /// Resets the playback session to the initial empty state.
   Future<void> resetPlaybackState() async {
-    await disposeAudio();
+    await _engine.stop();
     player.stopPlayback();
     player.setFadeActive(false);
     visualizer.resetState();
@@ -418,9 +428,7 @@ class AudioCoreController extends ChangeNotifier
     }
 
     return waveform
-        .map(
-          (value) => _roundWaveformValue((value / maxValue).clamp(0.0, 1.0)),
-        )
+        .map((value) => _roundWaveformValue((value / maxValue).clamp(0.0, 1.0)))
         .toList(growable: false);
   }
 
@@ -431,15 +439,9 @@ class AudioCoreController extends ChangeNotifier
   /// Returns decoded PCM samples for the current track or a specific file path.
   ///
   /// If [path] is omitted, this uses the currently loaded track.
-  /// [sampleStride] skips packet groups while decoding on the Rust backend.
+  /// [sampleStride] lets native backends skip frames while decoding.
   /// A value of `0` means no skipping.
   Future<Float32List> getAudioPcm({String? path, int sampleStride = 0}) async {
-    if (Platform.isAndroid) {
-      throw UnsupportedError(
-        'getAudioPcm is only available on the Rust-backed desktop platforms.',
-      );
-    }
-
     if (!_initialized) {
       await initialize();
     }
@@ -448,10 +450,7 @@ class AudioCoreController extends ChangeNotifier
       throw StateError('AudioCoreController is not initialized.');
     }
 
-    return rust.getAudioPcm(
-      path: path,
-      sampleStride: BigInt.from(sampleStride),
-    );
+    return _engine.getAudioPcm(path: path, sampleStride: sampleStride);
   }
 
   /// Requests Android audio library permission through the platform bridge.

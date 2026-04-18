@@ -4,9 +4,10 @@ import '../rust/api/simple_api.dart' as rust;
 import '../rust/api/simple/equalizer.dart';
 import '../track_metadata.dart';
 import 'audio_engine_interface.dart';
-import '../waveform_pcm_processor.dart';
+import 'pcm_waveform_support.dart';
+import 'rust_metadata_bridge.dart';
 
-class RustAudioEngine implements AudioEngine {
+class RustAudioEngine with PcmWaveformSupport implements AudioEngine {
   final _statusController = StreamController<AudioStatus>.broadcast();
   StreamSubscription? _subscription;
 
@@ -35,6 +36,9 @@ class RustAudioEngine implements AudioEngine {
     await _statusController.close();
     await rust.disposeAudio();
   }
+
+  @override
+  Future<void> stop() => rust.disposeAudio();
 
   @override
   Future<void> load(String path) => rust.loadAudioFile(path: path);
@@ -81,19 +85,19 @@ class RustAudioEngine implements AudioEngine {
     required String path,
     required int expectedChunks,
     int sampleStride = 0,
-  }) async {
-    final pcm = await rust.getAudioPcm(
-      path: path,
-      sampleStride: BigInt.from(sampleStride),
-    );
-    final channels = await rust.getAudioPcmChannelCount(path: path);
-    const processor = WaveformPcmProcessor();
-    return processor.process(
-      pcm,
-      expectedChunks: expectedChunks,
-      channels: channels,
-    );
-  }
+  }) => waveformFromPcm(
+    path: path,
+    expectedChunks: expectedChunks,
+    sampleStride: sampleStride,
+  );
+
+  @override
+  Future<Float32List> getAudioPcm({String? path, int sampleStride = 0}) =>
+      rust.getAudioPcm(path: path, sampleStride: BigInt.from(sampleStride));
+
+  @override
+  Future<int> getAudioPcmChannelCount({String? path}) =>
+      rust.getAudioPcmChannelCount(path: path);
 
   @override
   Future<void> setEqualizerConfig(EqualizerConfig config) =>
@@ -128,7 +132,7 @@ class RustAudioEngine implements AudioEngine {
   }) async {
     await rust.updateTrackMetadata(
       path: path,
-      metadata: _trackMetadataUpdateFromMap(metadata),
+      metadata: trackMetadataUpdateFromMap(metadata),
     );
     return true;
   }
@@ -139,7 +143,7 @@ class RustAudioEngine implements AudioEngine {
     String? fallbackMediaUri,
   }) async {
     final metadata = await rust.getTrackMetadata(path: path);
-    return TrackMetadata.fromRust(metadata);
+    return trackMetadataFromRust(metadata);
   }
 
   @override
@@ -149,81 +153,5 @@ class RustAudioEngine implements AudioEngine {
       throw ArgumentError.value(path, 'path', 'Path is required here.');
     }
     await rust.removeAllTags(path: targetPath);
-  }
-
-  rust.TrackMetadataUpdate _trackMetadataUpdateFromMap(
-    Map<String, Object?> metadata,
-  ) {
-    return rust.TrackMetadataUpdate(
-      title: _asString(metadata['title']),
-      artist: _asString(metadata['artist']),
-      album: _asString(metadata['album']),
-      albumArtist: _asString(metadata['albumArtist']),
-      trackNumber: _asInt(metadata['trackNumber']),
-      trackTotal: _asInt(metadata['trackTotal']),
-      discNumber: _asInt(metadata['discNumber']),
-      date: _asString(metadata['date']),
-      year: _asInt(metadata['year']),
-      comment: _asString(metadata['comment']),
-      lyrics: _asString(metadata['lyrics']),
-      composer: _asString(metadata['composer']),
-      lyricist: _asString(metadata['lyricist']),
-      performer: _asString(metadata['performer']),
-      conductor: _asString(metadata['conductor']),
-      remixer: _asString(metadata['remixer']),
-      genres: _asStringList(metadata['genres']),
-      pictures: _asPictureList(metadata['pictures']),
-    );
-  }
-
-  List<rust.TrackPicture> _asPictureList(Object? value) {
-    if (value is! List) return const <rust.TrackPicture>[];
-
-    final pictures = <rust.TrackPicture>[];
-    for (final entry in value) {
-      if (entry is Map<Object?, Object?>) {
-        pictures.add(_asPicture(entry.cast<String, Object?>()));
-      } else if (entry is Map) {
-        pictures.add(_asPicture(entry.cast<String, Object?>()));
-      }
-    }
-    return pictures;
-  }
-
-  rust.TrackPicture _asPicture(Map<String, Object?> map) {
-    final bytes = map['bytes'];
-    return rust.TrackPicture(
-      bytes: bytes is Uint8List
-          ? bytes
-          : bytes is List<int>
-          ? Uint8List.fromList(bytes)
-          : Uint8List(0),
-      mimeType: _asString(map['mimeType']) ?? 'image/jpeg',
-      pictureType: _asString(map['pictureType']) ?? 'Other',
-      description: _asString(map['description']),
-    );
-  }
-
-  List<String> _asStringList(Object? value) {
-    if (value is! List) return const <String>[];
-    return value
-        .whereType<Object?>()
-        .map(_asString)
-        .whereType<String>()
-        .toList(growable: false);
-  }
-
-  String? _asString(Object? value) {
-    if (value is String) {
-      final trimmed = value.trim();
-      return trimmed.isEmpty ? null : value;
-    }
-    return null;
-  }
-
-  int? _asInt(Object? value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return null;
   }
 }

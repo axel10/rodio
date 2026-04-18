@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import '../rust/api/simple/equalizer.dart';
 import '../track_metadata.dart';
 
@@ -23,6 +24,7 @@ class AudioStatus {
 
 abstract class AudioEngine {
   Future<void> initialize();
+  Future<void> stop();
   Future<void> dispose();
 
   Future<void> load(String path);
@@ -37,6 +39,9 @@ abstract class AudioEngine {
 
   // Visualization
   Future<List<double>> getLatestFft();
+  Future<Float32List> getAudioPcm({String? path, int sampleStride});
+
+  Future<int> getAudioPcmChannelCount({String? path});
   Future<List<double>> getWaveform({
     required String path,
     required int expectedChunks,
@@ -70,7 +75,9 @@ abstract class AudioEngine {
     required String path,
     String? fallbackMediaUri,
   }) async {
-    throw UnimplementedError('getTrackMetadata is not implemented on this platform.');
+    throw UnimplementedError(
+      'getTrackMetadata is not implemented on this platform.',
+    );
   }
 
   Future<void> removeAllTags({String? path});
