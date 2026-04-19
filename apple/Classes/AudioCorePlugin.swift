@@ -82,11 +82,12 @@ public final class AudioCorePlugin: NSObject, FlutterPlugin {
         return
       }
       let durationMs = Self.readInt(call.arguments, key: "durationMs") ?? 0
+      let positionMs = Self.readInt(call.arguments, key: "positionMs")
       do {
         #if os(iOS)
         try activateAudioSession()
         #endif
-        try engine.crossfade(path: path, durationMs: durationMs)
+        try engine.crossfade(path: path, durationMs: durationMs, positionMs: positionMs)
         sendPlayerState()
         result(nil)
       } catch {
@@ -228,6 +229,8 @@ public final class AudioCorePlugin: NSObject, FlutterPlugin {
     case "dispose":
       engine.dispose()
       #if os(iOS)
+      notificationTokens.forEach { NotificationCenter.default.removeObserver($0) }
+      notificationTokens.removeAll()
       deactivateAudioSession()
       shouldResumeAfterInterruption = false
       #endif
@@ -521,15 +524,18 @@ private final class AppleAudioEngine {
     preparedAccessPaths.remove(url.path)
   }
 
-  func crossfade(path: String, durationMs: Int) throws {
+  func crossfade(path: String, durationMs: Int, positionMs: Int? = nil) throws {
     let duration = max(0, durationMs)
     guard currentDeck.isLoaded, currentDeck.isPlaying, duration > 0 else {
       try load(path: path)
+      if let positionMs, positionMs > 0 {
+        try seek(positionMs: positionMs)
+      }
       try play(fadeDurationMs: duration, targetVolume: latestVolume)
       return
     }
 
-    try startCrossfade(path: path, durationMs: duration)
+    try startCrossfade(path: path, durationMs: duration, positionMs: positionMs)
   }
 
   func play(fadeDurationMs: Int, targetVolume: Double?) throws {
@@ -940,7 +946,7 @@ private final class AppleAudioEngine {
     currentDeck.loadedURL = nil
   }
 
-  private func startCrossfade(path: String, durationMs: Int) throws {
+  private func startCrossfade(path: String, durationMs: Int, positionMs: Int?) throws {
     guard currentDeck.loadedFile != nil else {
       try load(path: path)
       try play(fadeDurationMs: durationMs, targetVolume: latestVolume)
@@ -962,7 +968,14 @@ private final class AppleAudioEngine {
     incomingDeck.sampleRate = incomingFile.processingFormat.sampleRate
     incomingDeck.loadedURL = incomingURL
     incomingDeck.loadedFile = incomingFile
-    incomingDeck.playbackFramePosition = 0
+    let startFrame: AVAudioFramePosition
+    if let positionMs, positionMs > 0 {
+      let targetFrame = framePosition(forMilliseconds: positionMs, sampleRate: incomingDeck.sampleRate)
+      startFrame = max(0, min(targetFrame, incomingFile.length))
+    } else {
+      startFrame = 0
+    }
+    incomingDeck.playbackFramePosition = startFrame
     incomingDeck.isPlaybackScheduled = false
     incomingDeck.gain = 0.0
 
@@ -970,7 +983,7 @@ private final class AppleAudioEngine {
     currentDeck.gain = 1.0
     currentDeck.playerNode.volume = Float(latestVolume)
 
-    try startPlaybackIfNeeded(on: incomingDeck, from: 0, volume: 0.0)
+    try startPlaybackIfNeeded(on: incomingDeck, from: startFrame, volume: 0.0)
     incomingDeck.playerNode.volume = 0.0
     currentDeck.playerNode.volume = Float(latestVolume)
 

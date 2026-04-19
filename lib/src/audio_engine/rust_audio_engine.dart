@@ -44,8 +44,14 @@ class RustAudioEngine with PcmWaveformSupport implements AudioEngine {
   Future<void> load(String path) => rust.loadAudioFile(path: path);
 
   @override
-  Future<void> crossfade(String path, Duration duration) => rust
-      .crossfadeToAudioFile(path: path, durationMs: duration.inMilliseconds);
+  Future<void> crossfade(
+    String path,
+    Duration duration, {
+    Duration? position,
+  }) => rust.crossfadeToAudioFile(
+      path: path,
+      durationMs: duration.inMilliseconds,
+    );
 
   @override
   Future<void> play({Duration? fadeDuration}) =>

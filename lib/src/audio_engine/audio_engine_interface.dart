@@ -28,7 +28,11 @@ abstract class AudioEngine {
   Future<void> dispose();
 
   Future<void> load(String path);
-  Future<void> crossfade(String path, Duration duration);
+  Future<void> crossfade(
+    String path,
+    Duration duration, {
+    Duration? position,
+  });
   Future<void> play({Duration? fadeDuration});
   Future<void> pause({Duration? fadeDuration});
   Future<void> seek(Duration position);

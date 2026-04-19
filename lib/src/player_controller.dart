@@ -513,7 +513,11 @@ class NativeCrossfadeTransition extends PlaybackTransition {
   }) async {
     // Native crossfade handles current deck management internally in Rust.
     // It starts the new track immediately while the old one keeps playing (fading out).
-    await player._parent.engine.crossfade(uri, duration);
+    await player._parent.engine.crossfade(
+      uri,
+      duration,
+      position: position,
+    );
 
     // We update local state immediately
     player._selectedPath = uri;

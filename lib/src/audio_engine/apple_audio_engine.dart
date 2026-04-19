@@ -81,11 +81,16 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
   }
 
   @override
-  Future<void> crossfade(String path, Duration duration) async {
+  Future<void> crossfade(
+    String path,
+    Duration duration, {
+    Duration? position,
+  }) async {
     _currentPath = path;
     await _channel.invokeMethod('crossfade', <String, Object?>{
       'path': path,
       'durationMs': duration.inMilliseconds,
+      if (position != null) 'positionMs': position.inMilliseconds,
       'playerId': 'main',
     });
   }
