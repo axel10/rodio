@@ -324,6 +324,62 @@ class RandomLabTabState extends State<RandomLabTab> {
     return null;
   }
 
+  Future<void> _playTrack(
+    AudioTrack track, {
+    String? preferredPlaylistId,
+  }) async {
+    final playlistController = widget.controller.playlist;
+    final preferredIds = <String?>[
+      preferredPlaylistId,
+      playlistController.activePlaylistId,
+      _selectedPlaylistId,
+      playlistController.queuePlaylistId,
+    ];
+
+    final visited = <String>{};
+    for (final playlistId in preferredIds.whereType<String>()) {
+      if (!visited.add(playlistId)) continue;
+      final playlist = playlistController.playlistById(playlistId);
+      final index = playlist?.items.indexWhere((item) => item.id == track.id);
+      if (index != null && index >= 0) {
+        await playlistController.setActivePlaylist(
+          playlistId,
+          startIndex: index,
+          autoPlay: true,
+        );
+        return;
+      }
+    }
+
+    for (final playlist in playlistController.playlists) {
+      if (!visited.add(playlist.id)) continue;
+      final index = playlist.items.indexWhere((item) => item.id == track.id);
+      if (index >= 0) {
+        await playlistController.setActivePlaylist(
+          playlist.id,
+          startIndex: index,
+          autoPlay: true,
+        );
+        return;
+      }
+    }
+
+    await playlistController.ensureQueuePlaylist();
+    final queuePlaylist = playlistController.playlistById(
+      playlistController.queuePlaylistId,
+    );
+    final startIndex = queuePlaylist?.items.length ?? 0;
+    await playlistController.addTracksToPlaylist(
+      playlistController.queuePlaylistId,
+      <AudioTrack>[track],
+    );
+    await playlistController.setActivePlaylist(
+      playlistController.queuePlaylistId,
+      startIndex: startIndex,
+      autoPlay: true,
+    );
+  }
+
   Widget _buildShuffleDeckPanel() {
     final deck = widget.controller.playlist.currentDeck;
     final cursor = widget.controller.playlist.deckCursor;
@@ -343,6 +399,7 @@ class RandomLabTabState extends State<RandomLabTab> {
                 return _TrackSummaryTile(
                   track: track,
                   highlight: isCurrentCursor,
+                  onTap: () => unawaited(_playTrack(track)),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -382,6 +439,7 @@ class RandomLabTabState extends State<RandomLabTab> {
                 return _TrackSummaryTile(
                   track: track,
                   highlight: isCurrentCursor,
+                  onTap: () => unawaited(_playTrack(track)),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -542,6 +600,7 @@ class RandomLabTabState extends State<RandomLabTab> {
                   track: track,
                   highlight:
                       track.id == widget.controller.playlist.currentTrack?.id,
+                  onTap: () => unawaited(_playTrack(track)),
                   onToggleLike: () => _toggleLike(track),
                   onBumpPlayCount: () => _bumpPlayCount(track),
                 );
@@ -580,6 +639,13 @@ class RandomLabTabState extends State<RandomLabTab> {
                       highlight:
                           track.id ==
                           widget.controller.playlist.currentTrack?.id,
+                      onTap: () => unawaited(
+                        _playTrack(
+                          track,
+                          preferredPlaylistId:
+                              widget.controller.playlist.queuePlaylistId,
+                        ),
+                      ),
                       trailing: const Icon(Icons.queue_music),
                     );
                   },
@@ -671,6 +737,12 @@ class RandomLabTabState extends State<RandomLabTab> {
                             highlight:
                                 track.id ==
                                 widget.controller.playlist.currentTrack?.id,
+                            onTap: () => unawaited(
+                              _playTrack(
+                                track,
+                                preferredPlaylistId: selectedPlaylist.id,
+                              ),
+                            ),
                             trailing: const Icon(Icons.playlist_play),
                           );
                         },
@@ -832,12 +904,14 @@ class _TrackDraggableTile extends StatelessWidget {
     required this.track,
     required this.onToggleLike,
     required this.onBumpPlayCount,
+    required this.onTap,
     this.highlight = false,
   });
 
   final AudioTrack track;
   final VoidCallback onToggleLike;
   final VoidCallback onBumpPlayCount;
+  final VoidCallback onTap;
   final bool highlight;
 
   @override
@@ -862,12 +936,14 @@ class _TrackDraggableTile extends StatelessWidget {
         child: _TrackSummaryTile(
           track: track,
           highlight: highlight,
+          onTap: onTap,
           trailing: const Icon(Icons.drag_indicator),
         ),
       ),
       child: _TrackSummaryTile(
         track: track,
         highlight: highlight,
+        onTap: onTap,
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -893,11 +969,13 @@ class _TrackSummaryTile extends StatelessWidget {
   const _TrackSummaryTile({
     required this.track,
     required this.trailing,
+    this.onTap,
     this.highlight = false,
   });
 
   final AudioTrack track;
   final Widget trailing;
+  final VoidCallback? onTap;
   final bool highlight;
 
   @override
@@ -920,46 +998,50 @@ class _TrackSummaryTile extends StatelessWidget {
               ),
             )
           : null,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: highlight
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.primaryContainer,
-              child: Icon(
-                liked ? Icons.favorite : Icons.music_note,
-                size: 18,
-                color: highlight
-                    ? Theme.of(context).colorScheme.onPrimary
-                    : Theme.of(context).colorScheme.onPrimaryContainer,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: highlight
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.primaryContainer,
+                child: Icon(
+                  liked ? Icons.favorite : Icons.music_note,
+                  size: 18,
+                  color: highlight
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    track.title ?? track.id,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'playCount: $playCount',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      track.title ?? track.id,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'playCount: $playCount',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            trailing,
-          ],
+              const SizedBox(width: 8),
+              trailing,
+            ],
+          ),
         ),
       ),
     );
