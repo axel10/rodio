@@ -293,6 +293,126 @@ class AudioCoreController extends ChangeNotifier
     }
   }
 
+  /// Plays a specific track with one high-level command.
+  ///
+  /// The controller will try to locate the track in existing playlists first.
+  /// If it is not found, the track is staged in the queue playlist and played
+  /// from there.
+  Future<void> playTrack(
+    AudioTrack track, {
+    String? preferredPlaylistId,
+    FadeSettings? fadeSetting,
+  }) async {
+    final playlistController = playlist;
+    final searchOrder = <String?>[
+      preferredPlaylistId,
+      playlistController.activePlaylistId,
+      playlistController.queuePlaylistId,
+    ];
+
+    final visited = <String>{};
+    for (final playlistId in searchOrder.whereType<String>()) {
+      if (!visited.add(playlistId)) continue;
+      final playlist = playlistController.playlistById(playlistId);
+      final index = playlist?.items.indexWhere((item) => item.id == track.id);
+      if (index != null && index >= 0) {
+        await playlistController.setActivePlaylist(
+          playlistId,
+          startIndex: index,
+          autoPlay: true,
+          fadeSetting: fadeSetting,
+        );
+        return;
+      }
+    }
+
+    for (final playlist in playlistController.playlists) {
+      if (!visited.add(playlist.id)) continue;
+      final index = playlist.items.indexWhere((item) => item.id == track.id);
+      if (index >= 0) {
+        await playlistController.setActivePlaylist(
+          playlist.id,
+          startIndex: index,
+          autoPlay: true,
+          fadeSetting: fadeSetting,
+        );
+        return;
+      }
+    }
+
+    await playlistController.ensureQueuePlaylist();
+    final queuePlaylist = playlistController.playlistById(
+      playlistController.queuePlaylistId,
+    );
+    final startIndex = queuePlaylist?.items.length ?? 0;
+    await playlistController.addTracksToPlaylist(
+      playlistController.queuePlaylistId,
+      <AudioTrack>[track],
+      fadeSetting: fadeSetting,
+    );
+    await playlistController.setActivePlaylist(
+      playlistController.queuePlaylistId,
+      startIndex: startIndex,
+      autoPlay: true,
+      fadeSetting: fadeSetting,
+    );
+  }
+
+  /// Plays a track by id with one high-level command.
+  ///
+  /// The controller searches existing playlists for a matching track and then
+  /// delegates to [playTrack]. If no track matches, this throws a [StateError].
+  Future<void> playTrackById(
+    String trackId, {
+    String? preferredPlaylistId,
+    FadeSettings? fadeSetting,
+  }) async {
+    final playlistController = playlist;
+    final searchOrder = <String?>[
+      preferredPlaylistId,
+      playlistController.activePlaylistId,
+      playlistController.queuePlaylistId,
+    ];
+
+    final visited = <String>{};
+    for (final playlistId in searchOrder.whereType<String>()) {
+      if (!visited.add(playlistId)) continue;
+      final playlist = playlistController.playlistById(playlistId);
+      final track = _findTrackInPlaylist(playlist, trackId);
+      if (track != null) {
+        await playTrack(
+          track,
+          preferredPlaylistId: playlistId,
+          fadeSetting: fadeSetting,
+        );
+        return;
+      }
+    }
+
+    for (final playlist in playlistController.playlists) {
+      if (!visited.add(playlist.id)) continue;
+      final track = _findTrackInPlaylist(playlist, trackId);
+      if (track != null) {
+        await playTrack(
+          track,
+          preferredPlaylistId: playlist.id,
+          fadeSetting: fadeSetting,
+        );
+        return;
+      }
+    }
+
+    throw StateError('Track not found: $trackId');
+  }
+
+  AudioTrack? _findTrackInPlaylist(Playlist? playlist, String trackId) {
+    if (playlist == null) return null;
+    for (final track in playlist.items) {
+      if (track.id == trackId) return track;
+    }
+    return null;
+  }
+
   @override
   Future<void> clearPlayback() async {
     await _engine.stop();
