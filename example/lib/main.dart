@@ -219,11 +219,9 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       final selected = await _openAndroidMediaLibraryPicker(refreshedRoot);
       if (selected == null) return;
 
-      await _registerImportedTracks(
-        [selected.toAudioTrack()],
-        addToActivePlaylist: true,
-        fadeSetting: fadeSetting,
-      );
+      await _handleImportedTracks([
+        selected.toAudioTrack(),
+      ], fadeSetting: fadeSetting);
       return;
     }
 
@@ -236,26 +234,22 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
       return;
     }
 
-    final tracks = result.files
+    final paths = result.files
         .map((file) {
           final path = file.path;
           if (path == null || path.isEmpty) {
             return null;
           }
-          return _makeTrack(id: path, title: file.name, uri: path);
+          return path;
         })
-        .whereType<AudioTrack>()
+        .whereType<String>()
         .toList();
 
-    if (tracks.isEmpty) {
+    if (paths.isEmpty) {
       return;
     }
 
-    await _registerImportedTracks(
-      tracks,
-      addToActivePlaylist: true,
-      fadeSetting: fadeSetting,
-    );
+    await _handleImportedPaths(paths, fadeSetting: fadeSetting);
   }
 
   Future<AndroidMediaLibraryEntry?> _openAndroidMediaLibraryPicker(
@@ -270,55 +264,36 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  AudioTrack _makeTrack({
-    required String id,
-    required String title,
-    required String uri,
-  }) {
-    return AudioTrack(
-      id: id,
-      title: title,
-      uri: uri,
-      metadata: <String, Object?>{'isLike': false, 'playCount': 0},
-    );
-  }
-
-  Future<void> _registerImportedTracks(
-    List<AudioTrack> tracks, {
-    bool addToActivePlaylist = false,
-    bool addToQueue = false,
-    String? targetPlaylistId,
+  Future<void> _handleImportedPaths(
+    List<String> paths, {
     FadeSettings? fadeSetting,
   }) async {
-    if (tracks.isEmpty) return;
+    if (paths.isEmpty) return;
+
+    final tracks = _controller.resolveAudioTracks(paths);
 
     // 同步到 Random Lab 的 Library
     _randomLabKey.currentState?.addTracksToLibrary(tracks);
 
-    if (addToActivePlaylist) {
-      await _controller.playlist.addTracks(tracks, fadeSetting: fadeSetting);
-      if (!_controller.player.isPlaying &&
-          _controller.player.currentPath != null) {
-        await _controller.player.play(fadeSetting: fadeSetting);
-      }
-    }
+    await _controller.playPaths(
+      paths,
+      autoPlayFirst: true,
+      fadeSetting: fadeSetting,
+    );
+  }
 
-    if (addToQueue) {
-      await _controller.playlist.ensureQueuePlaylist();
-      await _controller.playlist.addTracksToPlaylist(
-        _controller.playlist.queuePlaylistId,
-        tracks,
-        fadeSetting: fadeSetting,
-      );
-    }
+  Future<void> _handleImportedTracks(
+    List<AudioTrack> tracks, {
+    FadeSettings? fadeSetting,
+  }) async {
+    if (tracks.isEmpty) return;
 
-    if (targetPlaylistId != null) {
-      await _controller.playlist.addTracksToPlaylist(
-        targetPlaylistId,
-        tracks,
-        fadeSetting: fadeSetting,
-      );
-    }
+    _randomLabKey.currentState?.addTracksToLibrary(tracks);
+    await _controller.playPaths(
+      tracks.map((track) => track.uri).toList(),
+      autoPlayFirst: true,
+      fadeSetting: fadeSetting,
+    );
   }
 
   Future<void> _loadWaveform() async {
@@ -393,10 +368,8 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
                       Expanded(
                         child: AudioDropRegion(
                           controller: _controller,
-                          onTracksAccepted: (tracks) => _registerImportedTracks(
-                            tracks,
-                            addToActivePlaylist: true,
-                          ),
+                          onPathsAccepted: (paths) =>
+                              _handleImportedPaths(paths),
                           child: _buildSpectrumVisualizers(),
                         ),
                       ),
@@ -482,7 +455,6 @@ class _VisualizerDemoPageState extends State<VisualizerDemoPage> {
             },
           ),
           const SizedBox(width: 12),
-
         ],
       ),
     );

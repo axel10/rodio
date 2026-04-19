@@ -358,6 +358,119 @@ class AudioCoreController extends ChangeNotifier
     );
   }
 
+  /// Plays one or more local file paths by merging them into the queue.
+  ///
+  /// Incoming paths are deduplicated against each other and the current queue.
+  /// The first valid path becomes the active item, and [autoPlayFirst]
+  /// controls whether playback starts immediately.
+  Future<void> playPaths(
+    List<String> paths, {
+    bool autoPlayFirst = true,
+    FadeSettings? fadeSetting,
+  }) async {
+    if (paths.isEmpty) return;
+    if (!isInitialized) {
+      await initialize();
+    }
+    if (!isInitialized) return;
+
+    final resolvedTracks = resolveAudioTracks(paths);
+    if (resolvedTracks.isEmpty) return;
+
+    final playlistController = playlist;
+    await playlistController.ensureQueuePlaylist();
+
+    final queuePlaylistId = playlistController.queuePlaylistId;
+    final queuePlaylist = playlistController.playlistById(queuePlaylistId);
+    final existingKeys = <String>{};
+    for (final track in queuePlaylist?.items ?? const <AudioTrack>[]) {
+      final trackKey =
+          _normalizeLocalPathKey(track.uri) ?? _normalizeLocalPathKey(track.id);
+      if (trackKey != null) {
+        existingKeys.add(trackKey);
+      }
+    }
+
+    final tracksToAdd = <AudioTrack>[];
+    String? firstTargetKey;
+
+    for (final track in resolvedTracks) {
+      final key =
+          _normalizeLocalPathKey(track.uri) ?? _normalizeLocalPathKey(track.id);
+      if (key == null) continue;
+
+      if (existingKeys.contains(key)) {
+        firstTargetKey ??= key;
+        continue;
+      }
+
+      firstTargetKey ??= key;
+      tracksToAdd.add(track);
+      existingKeys.add(key);
+    }
+
+    if (tracksToAdd.isNotEmpty) {
+      await playlistController.addTracksToPlaylist(
+        queuePlaylistId,
+        tracksToAdd,
+        fadeSetting: fadeSetting,
+      );
+    }
+
+    if (firstTargetKey == null) return;
+
+    final updatedQueuePlaylist = playlistController.playlistById(
+      queuePlaylistId,
+    );
+    final targetIndex =
+        updatedQueuePlaylist?.items.indexWhere((track) {
+          final trackKey =
+              _normalizeLocalPathKey(track.uri) ??
+              _normalizeLocalPathKey(track.id);
+          return trackKey == firstTargetKey;
+        }) ??
+        -1;
+    if (targetIndex < 0) return;
+
+    await playlistController.setActivePlaylist(
+      queuePlaylistId,
+      startIndex: targetIndex,
+      autoPlay: autoPlayFirst,
+      fadeSetting: fadeSetting,
+    );
+  }
+
+  /// Converts local file paths into normalized [AudioTrack] objects.
+  ///
+  /// The returned tracks are validated and normalized, but they are not
+  /// de-duplicated against the current queue. Callers can use them for
+  /// library import or any other side effects.
+  List<AudioTrack> resolveAudioTracks(List<String> paths) {
+    final tracks = <AudioTrack>[];
+    final seenKeys = <String>{};
+
+    for (final rawPath in paths) {
+      final normalizedPath = _normalizeLocalPath(rawPath);
+      if (normalizedPath == null) continue;
+      final key = _normalizeLocalPathKey(normalizedPath);
+      if (key == null || !seenKeys.add(key)) continue;
+
+      final file = File(normalizedPath);
+      if (!file.existsSync()) continue;
+
+      tracks.add(
+        AudioTrack(
+          id: normalizedPath,
+          title: _trackTitleFromPath(normalizedPath),
+          uri: normalizedPath,
+          metadata: <String, Object?>{'isLike': false, 'playCount': 0},
+        ),
+      );
+    }
+
+    return tracks;
+  }
+
   /// Plays a track by id with one high-level command.
   ///
   /// The controller searches existing playlists for a matching track and then
@@ -411,6 +524,28 @@ class AudioCoreController extends ChangeNotifier
       if (track.id == trackId) return track;
     }
     return null;
+  }
+
+  String? _normalizeLocalPath(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty || trimmed.contains('://')) {
+      return null;
+    }
+    return File(trimmed).absolute.path;
+  }
+
+  String? _normalizeLocalPathKey(String path) {
+    final normalized = _normalizeLocalPath(path);
+    if (normalized == null) return null;
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
+  }
+
+  String _trackTitleFromPath(String path) {
+    final uri = File(path).uri;
+    if (uri.pathSegments.isNotEmpty) {
+      return uri.pathSegments.last;
+    }
+    return path;
   }
 
   @override
@@ -611,9 +746,7 @@ class AudioCoreController extends ChangeNotifier
       final granted = await _androidMediaLibraryChannel.invokeMethod<bool>(
         'ensureAudioPermission',
       );
-      debugPrint(
-        '[AudioCore][MediaLibrary] ensure permission result=$granted',
-      );
+      debugPrint('[AudioCore][MediaLibrary] ensure permission result=$granted');
       return granted ?? false;
     } catch (e) {
       debugPrint('ensureAndroidMediaLibraryPermission failed: $e');

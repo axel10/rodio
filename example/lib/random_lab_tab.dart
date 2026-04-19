@@ -238,7 +238,8 @@ class RandomLabTabState extends State<RandomLabTab> {
     return AudioDropRegion(
       controller: widget.controller,
       overlayText: 'Drop files here to import into the random lab',
-      onTracksAccepted: (tracks) async {
+      onPathsAccepted: (paths) async {
+        final tracks = widget.controller.resolveAudioTracks(paths);
         addTracksToLibrary(tracks);
         await widget.controller.playlist.ensureQueuePlaylist();
         await widget.controller.playlist.addTracksToPlaylist(

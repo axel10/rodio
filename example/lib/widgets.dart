@@ -11,13 +11,13 @@ class AudioDropRegion extends StatefulWidget {
     required this.controller,
     required this.child,
     this.overlayText = 'Drag an audio file here',
-    this.onTracksAccepted,
+    this.onPathsAccepted,
   });
 
   final AudioCoreController controller;
   final Widget child;
   final String overlayText;
-  final Future<void> Function(List<AudioTrack> tracks)? onTracksAccepted;
+  final Future<void> Function(List<String> paths)? onPathsAccepted;
 
   @override
   State<AudioDropRegion> createState() => _AudioDropRegionState();
@@ -35,33 +35,22 @@ class _AudioDropRegionState extends State<AudioDropRegion> {
     if (!widget.controller.isInitialized) {
       await widget.controller.initialize();
     }
-    final List<AudioTrack> tracks = [];
+    final List<String> paths = [];
     for (final file in files) {
       final path = file.path;
       if (path.isNotEmpty && File(path).existsSync()) {
-        tracks.add(
-          AudioTrack(
-            id: path,
-            title: file.name,
-            uri: path,
-            metadata: <String, Object?>{'isLike': false, 'playCount': 0},
-          ),
-        );
+        paths.add(path);
       }
     }
-    if (tracks.isEmpty) return;
+    if (paths.isEmpty) return;
 
-    final handler = widget.onTracksAccepted;
+    final handler = widget.onPathsAccepted;
     if (handler != null) {
-      await handler(tracks);
+      await handler(paths);
       return;
     }
 
-    await widget.controller.playlist.addTracks(tracks);
-    if (!widget.controller.player.isPlaying &&
-        widget.controller.player.currentPath != null) {
-      await widget.controller.player.play();
-    }
+    await widget.controller.playPaths(paths);
   }
 
   @override
@@ -122,10 +111,9 @@ class WaveformPainter extends CustomPainter {
 
     for (var i = 0; i < waveform.length; i++) {
       final value = waveform[i];
-      final height = (value * maxBarHeight).clamp(
-        math.min<double>(2.0, maxBarHeight),
-        maxBarHeight,
-      ).toDouble();
+      final height = (value * maxBarHeight)
+          .clamp(math.min<double>(2.0, maxBarHeight), maxBarHeight)
+          .toDouble();
       final left = i * barWidth;
       final top = (maxBarHeight - height) / 2; // Center vertically
 
@@ -178,10 +166,9 @@ class DemoSpectrumPainter extends CustomPainter {
     canvas.clipRect(Rect.fromLTWH(0, safeTop, size.width, usableHeight));
     for (var i = 0; i < bands.length; i++) {
       final v = bands[i].clamp(0.0, 1.0);
-      final h = (v * usableHeight).clamp(
-        math.min<double>(minBarHeight, usableHeight),
-        usableHeight,
-      ).toDouble();
+      final h = (v * usableHeight)
+          .clamp(math.min<double>(minBarHeight, usableHeight), usableHeight)
+          .toDouble();
       final left = gap + i * (barWidth + gap);
       final top = baseline - h;
       final rect = RRect.fromRectAndRadius(
