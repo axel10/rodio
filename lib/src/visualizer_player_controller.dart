@@ -207,6 +207,7 @@ class AudioCoreController extends ChangeNotifier
     // Initialize Audio Engine
     try {
       await _engine.initialize();
+      await _engine.updateVisualizerFftOptions(visualizer.options);
       _playbackStateSubscription = _engine.statusStream.listen((status) {
         player.applySnapshot(
           status.path,
@@ -603,7 +604,10 @@ class AudioCoreController extends ChangeNotifier
 
   Future<void> _onAnalysisTick() async {
     await _refreshLatestFftCache();
-    visualizer.processAnalysisTick(player.isPlaying, player.position);
+    visualizer.processAnalysisTick(
+      player.isPlaying,
+      player.position,
+    );
   }
 
   void _onRenderTick() {

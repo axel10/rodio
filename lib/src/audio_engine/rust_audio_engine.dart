@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../fft_processor.dart';
 import '../rust/api/simple_api.dart' as rust;
 import '../rust/api/simple/equalizer.dart';
 import '../track_metadata.dart';
@@ -85,6 +86,14 @@ class RustAudioEngine with PcmWaveformSupport implements AudioEngine {
     final data = await rust.getLatestFft();
     return data.map((e) => e.toDouble()).toList();
   }
+
+  @override
+  Future<void> updateVisualizerFftOptions(
+    VisualizerOptimizationOptions options,
+  ) async {}
+
+  @override
+  bool get fftDataIsPreGrouped => false;
 
   @override
   Future<List<double>> getWaveform({

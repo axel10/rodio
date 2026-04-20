@@ -66,6 +66,7 @@ class VisualizerController extends ChangeNotifier {
 
   void updateOptions(VisualizerOptimizationOptions options) {
     _fftProcessor.updateOptions(options);
+    unawaited(_parent.engine.updateVisualizerFftOptions(options));
     notifyListeners();
   }
 
@@ -78,7 +79,11 @@ class VisualizerController extends ChangeNotifier {
   }
 
   @internal
-  void processAnalysisTick(bool isPlaying, Duration position) {
+  void processAnalysisTick(
+    bool isPlaying,
+    Duration position, {
+    bool sourceAlreadyGrouped = false,
+  }) {
     if (!_fftEnabled) return;
 
     final engineBins = _getLatestFft();
@@ -102,7 +107,12 @@ class VisualizerController extends ChangeNotifier {
         : (nowMicros - _lastAnalysisMicros) / 1000000.0;
     _lastAnalysisMicros = nowMicros;
 
-    _fftProcessor.processAnalysis(rawBins, dtSec);
+    _fftProcessor.processAnalysis(
+      rawBins,
+      dtSec,
+      sourceAlreadyGrouped: sourceAlreadyGrouped ||
+          _parent.engine.fftDataIsPreGrouped,
+    );
     _emitFrames(position, isPlaying);
   }
 

@@ -1,19 +1,23 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import '../fft_processor.dart';
 import '../rust/api/simple/equalizer.dart';
 import '../track_metadata.dart';
 import 'audio_engine_interface.dart';
 
 class AndroidAudioEngine implements AudioEngine {
   static const MethodChannel _channel = MethodChannel('my_exoplayer');
+  static const EventChannel _fftChannel = EventChannel('my_exoplayer/fft');
 
   final _statusController = StreamController<AudioStatus>.broadcast();
+  StreamSubscription? _fftSubscription;
   String? _currentPath;
   double _currentVolume = 1.0;
   final String _activePlayerId = 'main';
   EqualizerConfig? _lastConfig;
   bool _isPlaying = false;
+  List<double> _latestFftCache = const <double>[];
   _PendingAndroidEdit? _pendingEdit;
 
   @override
@@ -45,6 +49,10 @@ class AndroidAudioEngine implements AudioEngine {
         }
       }
     });
+    _fftSubscription ??= _fftChannel.receiveBroadcastStream().listen(
+      _handleFftEvent,
+      onError: (_) {},
+    );
     // Ensure default player exists on native side
     await _channel.invokeMethod('sayHello');
   }
@@ -52,6 +60,9 @@ class AndroidAudioEngine implements AudioEngine {
   @override
   Future<void> dispose() async {
     _pendingEdit = null;
+    await _fftSubscription?.cancel();
+    _fftSubscription = null;
+    _latestFftCache = const <double>[];
     await _statusController.close();
     await _channel.invokeMethod('dispose', {'playerId': 'main'});
     await _channel.invokeMethod('dispose', {'playerId': 'crossfade'});
@@ -60,6 +71,7 @@ class AndroidAudioEngine implements AudioEngine {
   @override
   Future<void> stop() async {
     _pendingEdit = null;
+    _latestFftCache = const <double>[];
     await _channel.invokeMethod('dispose', {'playerId': 'main'});
     await _channel.invokeMethod('dispose', {'playerId': 'crossfade'});
   }
@@ -67,6 +79,7 @@ class AndroidAudioEngine implements AudioEngine {
   @override
   Future<void> load(String path) async {
     _currentPath = path;
+    _latestFftCache = const <double>[];
     debugPrint('[AndroidAudioEngine] load path=$path');
     await _channel.invokeMethod('load', {
       'url': path,
@@ -84,6 +97,7 @@ class AndroidAudioEngine implements AudioEngine {
       '[AndroidAudioEngine] crossfade path=$path durationMs=${duration.inMilliseconds} '
       'positionMs=${position?.inMilliseconds}',
     );
+    _latestFftCache = const <double>[];
     await _channel.invokeMethod('crossfade', {
       'path': path,
       'durationMs': duration.inMilliseconds,
@@ -158,16 +172,21 @@ class AndroidAudioEngine implements AudioEngine {
 
   @override
   Future<List<double>> getLatestFft() async {
-    try {
-      final List<dynamic>? result = await _channel.invokeMethod(
-        'getLatestFft',
-        {'playerId': _activePlayerId},
-      );
-      if (result == null) return [];
-      return result.map((e) => (e as num).toDouble()).toList();
-    } catch (e) {
-      return [];
-    }
+    return List<double>.from(_latestFftCache, growable: false);
+  }
+
+  @override
+  bool get fftDataIsPreGrouped => true;
+
+  @override
+  Future<void> updateVisualizerFftOptions(
+    VisualizerOptimizationOptions options,
+  ) {
+    return _channel.invokeMethod('configureFftProcessing', {
+      'frequencyGroups': options.frequencyGroups,
+      'skipHighFrequencyGroups': options.skipHighFrequencyGroups,
+      'aggregationMode': options.aggregationMode.name,
+    });
   }
 
   @override
@@ -205,6 +224,20 @@ class AndroidAudioEngine implements AudioEngine {
   Future<void> setEqualizerConfig(EqualizerConfig config) async {
     _lastConfig = config;
     await _applyConfigToPlayer(_activePlayerId, config);
+  }
+
+  void _handleFftEvent(dynamic event) {
+    if (event is! Map) return;
+    final map = event.cast<Object?, Object?>();
+    final playerId = map['playerId']?.toString();
+    if (playerId != _activePlayerId) return;
+
+    final values = map['values'];
+    if (values is! List) return;
+
+    _latestFftCache = values
+        .map((entry) => (entry as num?)?.toDouble() ?? 0.0)
+        .toList(growable: false);
   }
 
   Future<void> _applyConfigToPlayer(

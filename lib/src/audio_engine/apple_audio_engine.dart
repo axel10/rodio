@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:dart_chromaprint/dart_chromaprint.dart';
 
+import '../fft_processor.dart';
 import '../rust/api/simple/equalizer.dart';
 import '../rust/api/simple_api.dart' as rust;
 import '../track_metadata.dart';
@@ -159,6 +160,14 @@ class AppleAudioEngine with PcmWaveformSupport implements AudioEngine {
       return const <double>[];
     }
   }
+
+  @override
+  Future<void> updateVisualizerFftOptions(
+    VisualizerOptimizationOptions options,
+  ) async {}
+
+  @override
+  bool get fftDataIsPreGrouped => false;
 
   @override
   Future<Float32List> getAudioPcm({String? path, int sampleStride = 0}) async {

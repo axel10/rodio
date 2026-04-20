@@ -128,16 +128,22 @@ class FftProcessor {
     }
   }
 
-  void processAnalysis(List<double> rawBins, double dtSec) {
+  void processAnalysis(
+    List<double> rawBins,
+    double dtSec, {
+    bool sourceAlreadyGrouped = false,
+  }) {
     _latestRawFft = rawBins;
     if (rawBins.isEmpty) return;
 
-    final grouped = _groupBins(
-      rawBins,
-      _options.frequencyGroups,
-      _options.aggregationMode,
-      _options.skipHighFrequencyGroups,
-    );
+    final grouped = sourceAlreadyGrouped
+        ? _normalizeGroupedSource(rawBins, _options.frequencyGroups)
+        : _groupBins(
+            rawBins,
+            _options.frequencyGroups,
+            _options.aggregationMode,
+            _options.skipHighFrequencyGroups,
+          );
     final normalized = _normalizeAndScale(
       grouped,
       _options.logarithmicScale,
@@ -244,6 +250,13 @@ class FftProcessor {
       }
     }
     return out;
+  }
+
+  List<double> _normalizeGroupedSource(List<double> bins, int groups) {
+    if (groups <= 0) return const <double>[];
+    if (bins.isEmpty) return List<double>.filled(groups, 0.0);
+    if (bins.length == groups) return List<double>.from(bins);
+    return _resampleFftState(bins, groups);
   }
 
   List<double> _normalizeAndScale(

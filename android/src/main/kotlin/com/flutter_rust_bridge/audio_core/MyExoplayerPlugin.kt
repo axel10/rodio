@@ -29,6 +29,7 @@ import com.linc.amplituda.Amplituda
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -157,6 +158,7 @@ class MyExoplayerPlugin :
 
     private lateinit var channel: MethodChannel
     private lateinit var mediaLibraryChannel: MethodChannel
+    private lateinit var fftEventChannel: EventChannel
     private var context: Context? = null
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
@@ -166,6 +168,15 @@ class MyExoplayerPlugin :
     private var crossfadeAnimator: ValueAnimator? = null
     private var crossfadeGeneration: Long = 0L
     private var activeCrossfadeSession: CrossfadeSession? = null
+    private var fftEventSink: EventChannel.EventSink? = null
+
+    private data class FftGroupingConfig(
+        val frequencyGroups: Int = 32,
+        val skipHighFrequencyGroups: Int = 0,
+        val aggregationMode: String = "peak",
+    )
+
+    private var fftGroupingConfig = FftGroupingConfig()
 
     private data class CrossfadeSession(
         val generation: Long,
@@ -189,6 +200,19 @@ class MyExoplayerPlugin :
             "audio_core.media_library",
         )
         mediaLibraryChannel.setMethodCallHandler(this)
+        fftEventChannel = EventChannel(
+            flutterPluginBinding.binaryMessenger,
+            "my_exoplayer/fft",
+        )
+        fftEventChannel.setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                fftEventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                fftEventSink = null
+            }
+        })
         
         amplituda = Amplituda(context)
         // Initialize default player
@@ -240,6 +264,14 @@ class MyExoplayerPlugin :
         cppEqualizerProcessor.setNumBands(10)
         
         val ctx = PlayerContext(id, player, fftProcessor, cppEqualizerProcessor, cppFingerprintProcessor)
+        fftProcessor.updateGroupingOptions(
+            fftGroupingConfig.frequencyGroups,
+            fftGroupingConfig.skipHighFrequencyGroups,
+            fftGroupingConfig.aggregationMode,
+        )
+        fftProcessor.onFftUpdated = { magnitudes ->
+            instance?.emitFftData(ctx.id, magnitudes)
+        }
         player.addListener(createPlayerListener(ctx))
         playerContexts[id] = ctx
         return ctx
@@ -564,6 +596,24 @@ class MyExoplayerPlugin :
             }
             "getLatestFft" -> {
                 result.success(ctx.fftProcessor.getLatestMagnitudes().toList())
+            }
+            "configureFftProcessing" -> {
+                val groups = call.argument<Int>("frequencyGroups") ?: 32
+                val skipHigh = call.argument<Int>("skipHighFrequencyGroups") ?: 0
+                val aggregationMode = call.argument<String>("aggregationMode") ?: "peak"
+                fftGroupingConfig = FftGroupingConfig(
+                    frequencyGroups = groups.coerceAtLeast(1),
+                    skipHighFrequencyGroups = skipHigh.coerceAtLeast(0),
+                    aggregationMode = aggregationMode,
+                )
+                playerContexts.values.forEach { playerContext ->
+                    playerContext.fftProcessor.updateGroupingOptions(
+                        fftGroupingConfig.frequencyGroups,
+                        fftGroupingConfig.skipHighFrequencyGroups,
+                        fftGroupingConfig.aggregationMode,
+                    )
+                }
+                result.success(null)
             }
             "getCurrentPosition" -> {
                 val pos = ctx.player.currentPosition
@@ -1123,6 +1173,7 @@ class MyExoplayerPlugin :
     private fun releasePlayerContext(ctx: PlayerContext) {
         ctx.volumeAnimator?.cancel()
         ctx.volumeAnimator = null
+        ctx.fftProcessor.onFftUpdated = null
         ctx.player.release()
         ctx.equalizer?.release()
         ctx.bassBoost?.release()
@@ -1368,6 +1419,8 @@ class MyExoplayerPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         mediaLibraryChannel.setMethodCallHandler(null)
+        fftEventChannel.setStreamHandler(null)
+        fftEventSink = null
         instance = null
         amplituda = null
         context = null
@@ -1405,5 +1458,15 @@ class MyExoplayerPlugin :
         activityBinding?.removeRequestPermissionsResultListener(this)
         activityBinding = null
         activity = null
+    }
+
+    private fun emitFftData(playerId: String, magnitudes: FloatArray) {
+        val payload = mapOf(
+            "playerId" to playerId,
+            "values" to magnitudes.map { it.toDouble() },
+        )
+        Handler(Looper.getMainLooper()).post {
+            fftEventSink?.success(payload)
+        }
     }
 }

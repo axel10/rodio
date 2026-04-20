@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../fft_processor.dart';
 import '../rust/api/simple/equalizer.dart';
 import '../track_metadata.dart';
 
@@ -43,6 +44,8 @@ abstract class AudioEngine {
 
   // Visualization
   Future<List<double>> getLatestFft();
+  Future<void> updateVisualizerFftOptions(VisualizerOptimizationOptions options);
+  bool get fftDataIsPreGrouped;
   Future<Float32List> getAudioPcm({String? path, int sampleStride});
 
   Future<int> getAudioPcmChannelCount({String? path});

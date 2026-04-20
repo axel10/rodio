@@ -8,26 +8,51 @@ import org.jtransforms.fft.FloatFFT_1D
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.sqrt
+import kotlin.math.pow
 
 /**
  * An AudioProcessor that calculates FFT on the PCM audio data.
  */
 @UnstableApi
 class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() {
+    enum class FftAggregationMode {
+        PEAK,
+        MEAN,
+        RMS;
+
+        companion object {
+            fun fromName(name: String?): FftAggregationMode {
+                return when (name?.lowercase()) {
+                    "mean" -> MEAN
+                    "rms" -> RMS
+                    else -> PEAK
+                }
+            }
+        }
+    }
 
     private val fft = FloatFFT_1D(fftSize.toLong())
     private val fftBuffer = FloatArray(fftSize * 2) // Real and Imaginary parts
     private val window = FloatArray(fftSize)
+    private val groupedLock = Any()
     
     // Accumulate samples for FFT
     private val sampleBuffer = FloatArray(fftSize)
     private var sampleCount = 0L
 
     // Thread-safe storage for the latest magnitude spectrum
-    private val latestMagnitudes = AtomicReference<FloatArray>(FloatArray(fftSize / 2))
+    private val latestMagnitudes = AtomicReference<FloatArray>(FloatArray(32))
+    @Volatile
+    var onFftUpdated: ((FloatArray) -> Unit)? = null
 
     @Volatile
     var isPaused: Boolean = false
+    @Volatile
+    private var frequencyGroups: Int = 32
+    @Volatile
+    private var skipHighFrequencyGroups: Int = 0
+    @Volatile
+    private var aggregationMode: FftAggregationMode = FftAggregationMode.PEAK
 
     init {
         // Pre-calculate Hanning window
@@ -101,6 +126,19 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
         outputBuffer.flip()
     }
 
+    fun updateGroupingOptions(
+        frequencyGroups: Int,
+        skipHighFrequencyGroups: Int,
+        aggregationMode: String?,
+    ) {
+        synchronized(groupedLock) {
+            this.frequencyGroups = frequencyGroups.coerceAtLeast(1)
+            this.skipHighFrequencyGroups = skipHighFrequencyGroups.coerceAtLeast(0)
+            this.aggregationMode = FftAggregationMode.fromName(aggregationMode)
+            latestMagnitudes.set(FloatArray(this.frequencyGroups))
+        }
+    }
+
     private fun processSample(monoSample: Float) {
         sampleBuffer[(sampleCount % fftSize).toInt()] = monoSample
         sampleCount++
@@ -117,14 +155,17 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
         }
         
         fft.realForwardFull(fftBuffer)
-        
-        val magnitudes = FloatArray(fftSize / 2)
+
+        val rawMagnitudes = FloatArray(fftSize / 2)
         for (i in 0 until fftSize / 2) {
             val real = fftBuffer[2 * i]
             val imag = fftBuffer[2 * i + 1]
-            magnitudes[i] = sqrt(real * real + imag * imag) / fftSize
+            rawMagnitudes[i] = sqrt(real * real + imag * imag) / fftSize
         }
-        latestMagnitudes.set(magnitudes)
+
+        val groupedMagnitudes = groupBins(rawMagnitudes)
+        latestMagnitudes.set(groupedMagnitudes)
+        onFftUpdated?.invoke(groupedMagnitudes)
     }
 
     override fun onFlush() {
@@ -137,11 +178,64 @@ class FFTAudioProcessor(private val fftSize: Int = 1024) : BaseAudioProcessor() 
 
     private fun resetInternalState() {
         sampleCount = 0
-        latestMagnitudes.set(FloatArray(fftSize / 2))
+        latestMagnitudes.set(FloatArray(frequencyGroups.coerceAtLeast(1)))
         for (i in sampleBuffer.indices) sampleBuffer[i] = 0f
     }
 
     fun getLatestMagnitudes(): FloatArray {
         return latestMagnitudes.get()
+    }
+
+    private fun groupBins(bins: FloatArray): FloatArray {
+        val groups = frequencyGroups.coerceAtLeast(1)
+        if (bins.isEmpty()) return FloatArray(groups)
+        if (bins.size <= 1) return FloatArray(groups)
+
+        val totalGroups = (groups + skipHighFrequencyGroups).coerceAtLeast(groups).coerceAtMost(512)
+        val binCount = bins.size
+        val boundaries = IntArray(totalGroups + 1) { 1 }
+        boundaries[0] = 1
+        boundaries[totalGroups] = binCount
+
+        for (i in 1 until totalGroups) {
+            val t = i.toDouble() / totalGroups.toDouble()
+            boundaries[i] = ((binCount.toDouble().pow(t) - 1.0).toInt())
+                .coerceIn(1, binCount - 1)
+        }
+
+        for (i in 1..totalGroups) {
+            if (boundaries[i] <= boundaries[i - 1]) {
+                boundaries[i] = (boundaries[i - 1] + 1).coerceIn(1, binCount)
+            }
+        }
+        boundaries[totalGroups] = binCount
+
+        val out = FloatArray(groups)
+        for (g in 0 until groups) {
+            val start = boundaries[g]
+            val end = boundaries[g + 1]
+            if (end <= start) {
+                out[g] = 0f
+                continue
+            }
+
+            var acc = 0f
+            var peak = 0f
+            var square = 0f
+            for (i in start until end) {
+                val value = bins[i]
+                if (value > peak) peak = value
+                acc += value
+                square += value * value
+            }
+
+            val count = (end - start).toFloat()
+            out[g] = when (aggregationMode) {
+                FftAggregationMode.PEAK -> peak
+                FftAggregationMode.MEAN -> acc / count
+                FftAggregationMode.RMS -> sqrt(square / count)
+            }
+        }
+        return out
     }
 }
