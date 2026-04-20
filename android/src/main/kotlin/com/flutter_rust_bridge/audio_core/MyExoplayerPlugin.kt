@@ -374,6 +374,12 @@ class MyExoplayerPlugin :
         }
 
         if (ctx == null) {
+            if (call.method == "dispose") {
+                // Make dispose idempotent so repeated cleanup calls do not fail
+                // when the player context has already been removed.
+                result.success(null)
+                return
+            }
             result.error("PLAYER_NOT_FOUND", "Player context not found for ID: $playerId", null)
             return
         }
