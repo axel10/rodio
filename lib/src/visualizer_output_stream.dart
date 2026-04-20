@@ -13,8 +13,10 @@ class VisualizerOutputStream {
   VisualizerOutputStream({
     required VisualizerOutputConfig config,
     required List<double> Function() fftSourceProvider,
+    required bool sourceAlreadyGrouped,
   }) : _config = config,
-       _fftSourceProvider = fftSourceProvider {
+       _fftSourceProvider = fftSourceProvider,
+       _sourceAlreadyGrouped = sourceAlreadyGrouped {
     _fftProcessor = FftProcessor(fftSize: 1024, options: config.options);
     // Listen to stream subscription to auto-start/stop
     _fftStreamController.onListen = _onListen;
@@ -23,6 +25,7 @@ class VisualizerOutputStream {
 
   final VisualizerOutputConfig _config;
   final List<double> Function() _fftSourceProvider;
+  final bool _sourceAlreadyGrouped;
   late final FftProcessor _fftProcessor;
 
   final StreamController<FftFrame> _fftStreamController =
@@ -116,7 +119,11 @@ class VisualizerOutputStream {
         : (nowMicros - _lastAnalysisMicros) / 1000000.0;
     _lastAnalysisMicros = nowMicros;
 
-    _fftProcessor.processAnalysis(rawBins, dtSec);
+    _fftProcessor.processAnalysis(
+      rawBins,
+      dtSec,
+      sourceAlreadyGrouped: _sourceAlreadyGrouped,
+    );
 
     // Process render for interpolation
     _fftProcessor.processRender(_renderIntervalMicros, _analysisIntervalMicros);

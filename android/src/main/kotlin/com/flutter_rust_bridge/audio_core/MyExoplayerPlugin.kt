@@ -13,6 +13,7 @@ import android.provider.MediaStore
 import android.animation.ValueAnimator
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -169,6 +170,11 @@ class MyExoplayerPlugin :
     private var crossfadeGeneration: Long = 0L
     private var activeCrossfadeSession: CrossfadeSession? = null
     private var fftEventSink: EventChannel.EventSink? = null
+    private val fftEmitHandler = Handler(Looper.getMainLooper())
+    private val fftEmitLock = Any()
+    private var fftPendingPayload: Pair<String, FloatArray>? = null
+    private var fftLastEmitAtMs: Long = 0L
+    private var fftEmitScheduled: Boolean = false
 
     private data class FftGroupingConfig(
         val frequencyGroups: Int = 32,
@@ -177,6 +183,18 @@ class MyExoplayerPlugin :
     )
 
     private var fftGroupingConfig = FftGroupingConfig()
+    private val fftEmitRunnable = Runnable {
+        val payload = synchronized(fftEmitLock) {
+            fftEmitScheduled = false
+            val current = fftPendingPayload
+            fftPendingPayload = null
+            if (current != null) {
+                fftLastEmitAtMs = SystemClock.elapsedRealtime()
+            }
+            current
+        }
+        payload?.let { sendFftPayload(it.first, it.second) }
+    }
 
     private data class CrossfadeSession(
         val generation: Long,
@@ -211,6 +229,11 @@ class MyExoplayerPlugin :
 
             override fun onCancel(arguments: Any?) {
                 fftEventSink = null
+                synchronized(fftEmitLock) {
+                    fftPendingPayload = null
+                    fftEmitScheduled = false
+                }
+                fftEmitHandler.removeCallbacks(fftEmitRunnable)
             }
         })
         
@@ -1461,12 +1484,35 @@ class MyExoplayerPlugin :
     }
 
     private fun emitFftData(playerId: String, magnitudes: FloatArray) {
+        synchronized(fftEmitLock) {
+            fftPendingPayload = playerId to magnitudes.copyOf()
+            val now = SystemClock.elapsedRealtime()
+            val elapsed = now - fftLastEmitAtMs
+            val throttleMs = 16L
+            if (elapsed >= throttleMs && !fftEmitScheduled) {
+                fftLastEmitAtMs = now
+                val current = fftPendingPayload
+                fftPendingPayload = null
+                if (current != null) {
+                    fftEmitHandler.post { sendFftPayload(current.first, current.second) }
+                }
+                return
+            }
+
+            if (!fftEmitScheduled) {
+                fftEmitScheduled = true
+                val delay = (throttleMs - elapsed).coerceAtLeast(1L)
+                fftEmitHandler.postDelayed(fftEmitRunnable, delay)
+            }
+        }
+    }
+
+    private fun sendFftPayload(playerId: String, magnitudes: FloatArray) {
+        val sink = fftEventSink ?: return
         val payload = mapOf(
             "playerId" to playerId,
             "values" to magnitudes.map { it.toDouble() },
         )
-        Handler(Looper.getMainLooper()).post {
-            fftEventSink?.success(payload)
-        }
+        sink.success(payload)
     }
 }

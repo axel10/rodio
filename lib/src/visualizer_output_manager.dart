@@ -6,12 +6,16 @@ import 'visualizer_output_stream.dart';
 /// This class allows creating multiple FFT processing pipelines,
 /// each with its own configuration, from a single audio source.
 class VisualizerOutputManager {
-  VisualizerOutputManager({required List<double> Function() fftSourceProvider})
-    : _fftSourceProvider = fftSourceProvider {
+  VisualizerOutputManager({
+    required List<double> Function() fftSourceProvider,
+    required bool sourceAlreadyGrouped,
+  }) : _fftSourceProvider = fftSourceProvider,
+       _sourceAlreadyGrouped = sourceAlreadyGrouped {
     _initDefaultOutput();
   }
 
   final List<double> Function() _fftSourceProvider;
+  final bool _sourceAlreadyGrouped;
 
   final Map<String, VisualizerOutputStream> _outputs = {};
   bool _disposed = false;
@@ -40,6 +44,7 @@ class VisualizerOutputManager {
     final output = VisualizerOutputStream(
       config: config,
       fftSourceProvider: _fftSourceProvider,
+      sourceAlreadyGrouped: _sourceAlreadyGrouped,
     );
     _outputs[config.id] = output;
 
@@ -79,6 +84,7 @@ class VisualizerOutputManager {
     final output = VisualizerOutputStream(
       config: config,
       fftSourceProvider: _fftSourceProvider,
+      sourceAlreadyGrouped: _sourceAlreadyGrouped,
     );
     _outputs[config.id] = output;
   }

@@ -17,14 +17,17 @@ class VisualizerController extends ChangeNotifier {
         const VisualizerOptimizationOptions(),
     required List<double> Function() getLatestFft,
     required AudioVisualizerParent parent,
+    required bool sourceAlreadyGrouped,
   }) : _getLatestFft = getLatestFft,
-       _parent = parent {
+       _parent = parent,
+       _sourceAlreadyGrouped = sourceAlreadyGrouped {
     _fftProcessor = FftProcessor(fftSize: fftSize, options: visualOptions);
     _initVisualizerOutputManager();
   }
 
   final List<double> Function() _getLatestFft;
   final AudioVisualizerParent _parent;
+  final bool _sourceAlreadyGrouped;
 
   late final FftProcessor _fftProcessor;
   late final VisualizerOutputManager visualizerOutputManager;
@@ -52,6 +55,7 @@ class VisualizerController extends ChangeNotifier {
   void _initVisualizerOutputManager() {
     visualizerOutputManager = VisualizerOutputManager(
       fftSourceProvider: () => _currentRawBins,
+      sourceAlreadyGrouped: _sourceAlreadyGrouped,
     );
   }
 
@@ -111,6 +115,7 @@ class VisualizerController extends ChangeNotifier {
       rawBins,
       dtSec,
       sourceAlreadyGrouped: sourceAlreadyGrouped ||
+          _sourceAlreadyGrouped ||
           _parent.engine.fftDataIsPreGrouped,
     );
     _emitFrames(position, isPlaying);

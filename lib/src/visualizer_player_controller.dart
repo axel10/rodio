@@ -78,6 +78,7 @@ class AudioCoreController extends ChangeNotifier
       fftSize: fftSize,
       visualOptions: visualOptions,
       getLatestFft: () => _latestFftCache,
+      sourceAlreadyGrouped: _engine.fftDataIsPreGrouped,
       parent: this,
     );
 
