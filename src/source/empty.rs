@@ -42,12 +42,12 @@ impl Source for Empty {
 
     #[inline]
     fn channels(&self) -> ChannelCount {
-        nz!(2) // Default to 2 (stereo) to prevent a 1-sample channel shifting bug in the Queue when swapping to stereo sources.
+        nz!(1)
     }
 
     #[inline]
     fn sample_rate(&self) -> SampleRate {
-        nz!(48000)
+        crate::DEFAULT_SAMPLE_RATE
     }
 
     #[inline]

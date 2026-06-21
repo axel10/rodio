@@ -141,7 +141,7 @@ impl Source for SourcesQueueOutput {
             _ => {
                 // - Current source is not exhausted, and is reporting no span length, or
                 // - Current source is exhausted, and will output silence after it.
-                self.current.channels().get() as usize
+                self.channels().get() as usize
             }
         };
 
@@ -389,18 +389,38 @@ mod tests {
     }
 
     #[test]
+    fn channel_correct_on_first_append() {
+        let (mixer_tx, mut mixer_rx) = crate::mixer::mixer(nz!(2), nz!(48000));
+        let (tx, rx) = queue::queue(true);
+
+        assert_eq!(rx.channels(), nz!(1), "initial channels should be 1");
+        mixer_tx.add(rx);
+
+        tx.append(SamplesBuffer::new(
+            nz!(2),
+            nz!(48000),
+            vec![1.0, -1.0, 1.0, -1.0],
+        ));
+
+        assert_eq!(mixer_rx.next(), Some(1.0), "expected L");
+        assert_eq!(mixer_rx.next(), Some(-1.0), "expected R");
+        assert_eq!(mixer_rx.next(), Some(1.0), "expected L");
+        assert_eq!(mixer_rx.next(), Some(-1.0), "expected R");
+    }
+
+    #[test]
     fn append_updates_metadata() {
         for keep_alive in [false, true] {
             let (tx, rx) = queue::queue(keep_alive);
             assert_eq!(
                 rx.channels(),
-                nz!(2),
-                "Initial channels should be 2 (keep_alive={keep_alive})"
+                nz!(1),
+                "Initial channels should be 1 (keep_alive={keep_alive})"
             );
             assert_eq!(
                 rx.sample_rate(),
-                nz!(48000),
-                "Initial sample rate should be 48000 (keep_alive={keep_alive})"
+                crate::DEFAULT_SAMPLE_RATE,
+                "Initial sample rate should be DEFAULT_SAMPLE_RATE (keep_alive={keep_alive})"
             );
 
             tx.append(SamplesBuffer::new(
