@@ -244,13 +244,15 @@ impl Player {
     /// When seeking beyond the end of a source this
     /// function might return an error if the duration of the source is not known.
     pub fn try_seek(&self, pos: Duration) -> Result<(), SeekError> {
-        let (order, feedback) = SeekOrder::new(pos);
-        *self.controls.seek.lock().unwrap() = Some(order);
-
         if self.sound_count.load(Ordering::Acquire) == 0 {
             // No sound is playing, seek will not be performed
-            return Ok(());
+            return Err(SeekError::NotSupported {
+                underlying_source: "Player",
+            });
         }
+
+        let (order, feedback) = SeekOrder::new(pos);
+        *self.controls.seek.lock().unwrap() = Some(order);
 
         match feedback.recv() {
             Ok(seek_res) => {
