@@ -126,20 +126,6 @@ pub(crate) fn duration_to_float(duration: Duration) -> Float {
     }
 }
 
-#[must_use]
-pub(crate) fn nearest_multiple_of_two(n: u32) -> u32 {
-    if n <= 1 {
-        return 1;
-    }
-    let next = n.next_power_of_two();
-    let prev = next >> 1;
-    if n - prev <= next - n {
-        prev
-    } else {
-        next
-    }
-}
-
 /// Convert Float to Duration with appropriate precision for the Sample type.
 #[inline]
 #[must_use]
