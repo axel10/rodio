@@ -244,25 +244,40 @@ impl Player {
     /// When seeking beyond the end of a source this
     /// function might return an error if the duration of the source is not known.
     pub fn try_seek(&self, pos: Duration) -> Result<(), SeekError> {
-        if self.sound_count.load(Ordering::Acquire) == 0 {
-            // No sound is playing, seek will not be performed
+        if self.sound_count.load(Ordering::Acquire) == 0 || self.is_paused() {
+            // No sound is playing or player is paused, seek will not be performed
             return Err(SeekError::NotSupported {
-                underlying_source: "Player",
+                underlying_source: "Player is paused or empty",
             });
         }
 
         let (order, feedback) = SeekOrder::new(pos);
         *self.controls.seek.lock().unwrap() = Some(order);
 
-        match feedback.recv_timeout(Duration::from_millis(100)) {
+        match feedback.recv_timeout(Duration::from_millis(300)) {
             Ok(seek_res) => {
                 *self.controls.position.lock().unwrap() = pos;
                 seek_res
             }
-            // The feedback channel closed or timed out (e.g. if the player is paused and not rendering audio).
-            Err(_) => Err(SeekError::NotSupported {
-                underlying_source: "Player seek timeout or paused",
-            }),
+            Err(e) => {
+                // Clear any lingering seek order to prevent stale seeks from executing later
+                let mut seek_lock = self.controls.seek.lock().unwrap();
+                let _ = seek_lock.take();
+
+                #[cfg(feature = "crossbeam-channel")]
+                let is_timeout = matches!(e, crossbeam_channel::RecvTimeoutError::Timeout);
+                #[cfg(not(feature = "crossbeam-channel"))]
+                let is_timeout = matches!(e, std::sync::mpsc::RecvTimeoutError::Timeout);
+
+                if is_timeout {
+                    Err(SeekError::NotSupported {
+                        underlying_source: "Player seek timed out",
+                    })
+                } else {
+                    // The channel was disconnected (e.g. superseded by another seek order or source ended)
+                    Ok(())
+                }
+            }
         }
     }
 
@@ -289,6 +304,7 @@ impl Player {
     pub fn clear(&self) {
         let len = self.sound_count.load(Ordering::SeqCst) as u32;
         *self.controls.to_clear.lock().unwrap() = len;
+        *self.controls.seek.lock().unwrap() = None;
         self.sound_count.store(0, Ordering::Relaxed);
         self.pause();
     }
