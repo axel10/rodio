@@ -254,15 +254,15 @@ impl Player {
         let (order, feedback) = SeekOrder::new(pos);
         *self.controls.seek.lock().unwrap() = Some(order);
 
-        match feedback.recv() {
+        match feedback.recv_timeout(Duration::from_millis(100)) {
             Ok(seek_res) => {
                 *self.controls.position.lock().unwrap() = pos;
                 seek_res
             }
-            // The feedback channel closed. Probably another SeekOrder was set
-            // invalidating this one and closing the feedback channel
-            // ... or the audio thread panicked.
-            Err(_) => Ok(()),
+            // The feedback channel closed or timed out (e.g. if the player is paused and not rendering audio).
+            Err(_) => Err(SeekError::NotSupported {
+                underlying_source: "Player seek timeout or paused",
+            }),
         }
     }
 
