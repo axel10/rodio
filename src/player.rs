@@ -71,7 +71,7 @@ impl Player {
     /// Builds a new `Player`, beginning playback on a stream.
     #[inline]
     pub fn connect_new(mixer: &Mixer) -> Player {
-        let (sink, source) = Player::new();
+        let (sink, source) = Player::new_with_format(mixer.channels(), mixer.sample_rate());
         mixer.add(source);
         sink
     }
@@ -79,7 +79,16 @@ impl Player {
     /// Builds a new `Player`.
     #[inline]
     pub fn new() -> (Player, queue::SourcesQueueOutput) {
-        let (queue_tx, queue_rx) = queue::queue(true);
+        Self::new_with_format(crate::math::nz!(1), crate::DEFAULT_SAMPLE_RATE)
+    }
+
+    /// Builds a new `Player` matching the given channel count and sample rate.
+    #[inline]
+    pub fn new_with_format(
+        channels: crate::common::ChannelCount,
+        sample_rate: crate::common::SampleRate,
+    ) -> (Player, queue::SourcesQueueOutput) {
+        let (queue_tx, queue_rx) = queue::queue_with_format(channels, sample_rate, true);
 
         let sink = Player {
             queue_tx,

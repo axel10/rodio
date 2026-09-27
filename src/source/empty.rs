@@ -7,14 +7,29 @@ use crate::{Sample, Source};
 
 /// An empty source.
 #[derive(Debug, Default, Copy, Clone)]
-pub struct Empty;
+pub struct Empty {
+    channels: Option<ChannelCount>,
+    sample_rate: Option<SampleRate>,
+}
 
 impl Empty {
     /// An empty source that immediately ends without ever returning a sample to
     /// play
     #[inline]
-    pub fn new() -> Self {
-        Self
+    pub const fn new() -> Self {
+        Self {
+            channels: None,
+            sample_rate: None,
+        }
+    }
+
+    /// An empty source with specific channels and sample rate.
+    #[inline]
+    pub const fn with_format(channels: ChannelCount, sample_rate: SampleRate) -> Self {
+        Self {
+            channels: Some(channels),
+            sample_rate: Some(sample_rate),
+        }
     }
 }
 
@@ -42,12 +57,12 @@ impl Source for Empty {
 
     #[inline]
     fn channels(&self) -> ChannelCount {
-        nz!(1)
+        self.channels.unwrap_or_else(|| nz!(1))
     }
 
     #[inline]
     fn sample_rate(&self) -> SampleRate {
-        crate::DEFAULT_SAMPLE_RATE
+        self.sample_rate.unwrap_or(crate::DEFAULT_SAMPLE_RATE)
     }
 
     #[inline]

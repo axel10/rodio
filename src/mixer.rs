@@ -53,16 +53,32 @@ struct Inner {
 }
 
 impl Mixer {
+    /// Returns the number of channels of this mixer.
+    #[inline]
+    pub fn channels(&self) -> ChannelCount {
+        self.0.channels
+    }
+
+    /// Returns the sample rate of this mixer.
+    #[inline]
+    pub fn sample_rate(&self) -> SampleRate {
+        self.0.sample_rate
+    }
+
     /// Adds a new source to mix to the existing ones.
     #[inline]
     pub fn add<T>(&self, source: T)
     where
         T: Source + Send + 'static,
     {
-        let uniform_source =
-            UniformSourceIterator::new(source, self.0.channels, self.0.sample_rate);
-        // Ignore send errors (channel dropped means MixerSource was dropped)
-        let _ = self.0.pending_tx.send(Box::new(uniform_source));
+        if source.channels() == self.0.channels && source.sample_rate() == self.0.sample_rate {
+            let _ = self.0.pending_tx.send(Box::new(source));
+        } else {
+            let uniform_source =
+                UniformSourceIterator::new(source, self.0.channels, self.0.sample_rate);
+            // Ignore send errors (channel dropped means MixerSource was dropped)
+            let _ = self.0.pending_tx.send(Box::new(uniform_source));
+        }
     }
 }
 

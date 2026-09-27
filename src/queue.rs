@@ -43,6 +43,27 @@ pub fn queue(keep_alive_if_empty: bool) -> (Arc<SourcesQueueInput>, SourcesQueue
     (input, output)
 }
 
+/// Builds a new queue with initial channel count and sample rate format.
+pub fn queue_with_format(
+    channels: ChannelCount,
+    sample_rate: SampleRate,
+    keep_alive_if_empty: bool,
+) -> (Arc<SourcesQueueInput>, SourcesQueueOutput) {
+    let input = Arc::new(SourcesQueueInput {
+        next_sounds: Mutex::new(VecDeque::new()),
+        keep_alive_if_empty: AtomicBool::new(keep_alive_if_empty),
+    });
+
+    let output = SourcesQueueOutput {
+        current: Box::new(Empty::with_format(channels, sample_rate)) as Box<_>,
+        signal_after_end: None,
+        input: input.clone(),
+        silence_samples_remaining: 0,
+    };
+
+    (input, output)
+}
+
 // TODO: consider reimplementing this with `from_factory`
 
 type Sound = Box<dyn Source + Send>;

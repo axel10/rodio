@@ -55,6 +55,10 @@ where
     type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.from == self.to {
+            return self.input.next();
+        }
+
         let result = match self.next_output_sample_pos {
             0 => {
                 // save first sample for mono -> stereo conversion
@@ -87,6 +91,9 @@ where
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (min, max) = self.input.size_hint();
+        if self.from == self.to {
+            return (min, max);
+        }
 
         let consumed = std::cmp::min(self.from.get(), self.next_output_sample_pos) as usize;
 
